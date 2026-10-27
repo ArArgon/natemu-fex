@@ -3743,6 +3743,9 @@ void OpDispatchBuilder::DIVOp(OpcodeArgs) {
 
   // This loads the divisor. 32-bit/64-bit paths mask inside the JIT, 8/16 do not.
   Ref Divisor = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.AllowUpperGarbage = Size >= OpSize::i32Bit});
+  if (fexc_slice1) {
+    fexc_div_width[Op->PC] = uint8_t(IR::OpSizeToSize(Size)); // natemu: the x86 width for the #DE check
+  }
 
   if (Size == OpSize::i64Bit && !Is64BitMode) {
     LogMan::Msg::EFmt("Doesn't exist in 32bit mode");
@@ -3784,6 +3787,9 @@ void OpDispatchBuilder::IDIVOp(OpcodeArgs) {
 
   const auto GPRSize = GetGPROpSize();
   auto Size = OpSizeFromSrc(Op);
+  if (fexc_slice1) {
+    fexc_div_width[Op->PC] = uint8_t(IR::OpSizeToSize(Size)); // natemu: the x86 width for the #DE check
+  }
 
   if (Size == OpSize::i64Bit && !Is64BitMode) {
     LogMan::Msg::EFmt("Doesn't exist in 32bit mode");

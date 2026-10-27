@@ -9,6 +9,7 @@ $end_info$
 #include "FEXCore/IR/IR.h"
 #include "Interface/Context/Context.h"
 #include "Interface/Core/JIT/JITClass.h"
+#include <fexc_hook.h>
 #include "Interface/Core/JIT/Relocations.h"
 #include "Interface/IR/Passes/RegisterAllocationPass.h"
 
@@ -942,6 +943,9 @@ DEF_OP(Div) {
       str<ARMEmitter::IndexType::PRE>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, -16);
       blr(TMP4);
       ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
+      if (fexc_slice1) {
+        FexcDivAfterCall(); // natemu: #DE reported by the resident helper
+      }
 
       // Move results to the destination registers
       mov(EmitSize, Quotient, TMP1);
@@ -1025,6 +1029,9 @@ DEF_OP(UDiv) {
       str<ARMEmitter::IndexType::PRE>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, -16);
       blr(TMP4);
       ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
+      if (fexc_slice1) {
+        FexcDivAfterCall(); // natemu: #DE reported by the resident helper
+      }
 
       // Move results to the destination registers
       mov(EmitSize, Quotient, TMP1);

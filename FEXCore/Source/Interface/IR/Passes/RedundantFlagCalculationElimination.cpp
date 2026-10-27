@@ -345,7 +345,7 @@ constexpr auto FlagInfos = [] {
 }();
 
 FlagInfo DeadFlagCalculationEliminination::Classify(IROp_Header* IROp) {
-  if (fexc_slice1 && FexcPrecision::GuestMemOp(IROp->Op)) {
+  if (fexc_slice1 && FexcPrecision::FaultPoint(IROp->Op)) {
     return FlagInfo::Pack({.Read = FLAG_ALL});
   }
   FlagInfo Info = FlagInfos[IROp->Op];
@@ -552,10 +552,11 @@ bool DeadFlagCalculationEliminination::ProcessBlock(IREmitter* IREmit, IRListVie
   while (true) {
     auto [CodeNode, IROp] = CodeLast();
 
-    // slice1: the incoming flags are live at the start of every instruction that has a guest memory access (the access
-    // reads them; an InvalidateFlags of the same instruction must not hide them from the instruction start).
+    // slice1: the incoming flags are live at the start of every instruction that has a guest memory access or a #DE
+    // check (the fault point reads them; an InvalidateFlags of the same instruction must not hide them from the
+    // instruction start).
     if (fexc_slice1) {
-      if (FexcPrecision::GuestMemOp(IROp->Op)) {
+      if (FexcPrecision::FaultPoint(IROp->Op)) {
         HasAccess = true;
       } else if (IROp->Op == OP_GUESTOPCODE) {
         if (HasAccess) {
@@ -712,7 +713,7 @@ void DeadFlagCalculationEliminination::Run(IREmitter* IREmit) {
         if (IROp->Op == OP_GUESTOPCODE) {
           Guest = CodeNode;
           Writer = Saved = false;
-        } else if (FexcPrecision::GuestMemOp(IROp->Op)) {
+        } else if (FexcPrecision::FaultPoint(IROp->Op)) {
           if (Writer && !Saved && Guest) {
             auto Cursor = IREmit->GetWriteCursor();
             IREmit->SetWriteCursor(Guest);
