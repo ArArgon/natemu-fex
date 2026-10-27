@@ -68,7 +68,13 @@ DEF_OP(ExitFunction) {
       auto RipReg = GetReg(Op->NewRIP);
       str(RipReg.X(), STATE, offsetof(FEXCore::Core::CpuStateFrame, State.rip));
     }
-    ldr(TMP2, STATE, offsetof(FEXCore::Core::CpuStateFrame, Pointers.DispatcherLoopTop));
+    // natemu slice1: a literal exit goes through FEX's block linker pointer (the resident links it, patching the
+    // `ldr` into a direct branch), a computed one through the dispatcher.
+    if (fexc_slice1 && IsInlineRIP) {
+      ldr(TMP2, STATE, offsetof(FEXCore::Core::CpuStateFrame, Pointers.ExitFunctionLinker));
+    } else {
+      ldr(TMP2, STATE, offsetof(FEXCore::Core::CpuStateFrame, Pointers.DispatcherLoopTop));
+    }
     br(TMP2);
 
     if (IsInlineRIP) {
