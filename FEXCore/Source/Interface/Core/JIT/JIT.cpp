@@ -802,7 +802,7 @@ void Arm64JITCore::EmitTFCheck() {
 }
 
 void Arm64JITCore::EmitSuspendInterruptCheck() {
-  if (CTX->Config.NeedsPendingInterruptFaultCheck) {
+  if (CTX->Config.NeedsPendingInterruptFaultCheck || fexc_slice1) { // natemu slice1: the runtime stops a vCPU by protecting this page
     // Trigger a fault if there are any pending interrupts
     // Used only for gdbserver at the moment
     constexpr size_t InterruptPageOffset =

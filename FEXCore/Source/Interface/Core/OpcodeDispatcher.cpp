@@ -683,7 +683,8 @@ void OpDispatchBuilder::CondJUMPOp(OpcodeArgs) {
   }
 
   FlushRegisterCache();
-  auto TrueBlock = JumpTargets.find(Target);
+  // natemu slice1: a jump back to the block's own entry exits like any other taken edge (no native backward branch).
+  auto TrueBlock = fexc_slice1 ? JumpTargets.end() : JumpTargets.find(Target);
   auto FalseBlock = JumpTargets.find(Op->PC + Op->InstSize);
 
   auto CurrentBlock = GetCurrentBlock();
@@ -742,7 +743,8 @@ void OpDispatchBuilder::CondJUMPRCXOp(OpcodeArgs) {
 
   Ref CondReg = LoadGPRRegister(X86State::REG_RCX, JcxGPRSize);
 
-  auto TrueBlock = JumpTargets.find(Target);
+  // natemu slice1: a jump back to the block's own entry exits like any other taken edge (no native backward branch).
+  auto TrueBlock = fexc_slice1 ? JumpTargets.end() : JumpTargets.find(Target);
   auto FalseBlock = JumpTargets.find(Op->PC + Op->InstSize);
 
   auto CurrentBlock = GetCurrentBlock();
@@ -814,7 +816,8 @@ void OpDispatchBuilder::LoopOp(OpcodeArgs) {
   }
 
   CalculateDeferredFlags();
-  auto TrueBlock = JumpTargets.find(Target);
+  // natemu slice1: a jump back to the block's own entry exits like any other taken edge (no native backward branch).
+  auto TrueBlock = fexc_slice1 ? JumpTargets.end() : JumpTargets.find(Target);
   auto FalseBlock = JumpTargets.find(Op->PC + Op->InstSize);
 
   {
