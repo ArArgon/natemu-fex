@@ -611,7 +611,8 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
 
 #ifdef ZYDIS_DISASSEMBLER
         if (FEXCore::Config::Get_X86DISASSEMBLE()) {
-          const uint8_t* InstBytes = reinterpret_cast<const uint8_t*>(InstAddress);
+          const uint8_t* InstBytes = SyscallHandler->ResolveGuestCodePointer(InstAddress, DecodedInfo->InstSize, reinterpret_cast<const uint8_t*>(InstAddress));
+          if (!InstBytes) std::abort();
           ZydisDisassembledInstruction ZydisInst;
           if (ZYAN_SUCCESS(ZydisDisassembleIntel(ZydisMachineMode, InstAddress, InstBytes, DecodedInfo->InstSize, &ZydisInst))) {
             LogMan::Msg::IFmt("    {:#x}: {}", InstAddress, ZydisInst.text);
@@ -642,7 +643,8 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
         }
 
         if (Config.SMCChecks == FEXCore::Config::CONFIG_SMC_FULL || Block.ForceFullSMCDetection) {
-          auto ExistingCodePtr = reinterpret_cast<uint8_t*>(Block.Entry + BlockInstructionsLength);
+          auto ExistingCodePtr = SyscallHandler->ResolveGuestCodePointer(Block.Entry + BlockInstructionsLength, DecodedInfo->InstSize, reinterpret_cast<const uint8_t*>(Block.Entry + BlockInstructionsLength));
+          if (!ExistingCodePtr) std::abort();
           auto InstAddressReg = Thread->OpDispatcher->_EntrypointOffset(GPRSize, InstAddress - GuestRIP);
 
           auto Value = FEXCore::Utils::crc32(ExistingCodePtr, DecodedInfo->InstSize);

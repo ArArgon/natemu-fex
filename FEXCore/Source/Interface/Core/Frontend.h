@@ -162,14 +162,14 @@ private:
     const uint8_t* AdjustedInstStream;
 
     DecodeStream& operator-=(size_t offset) noexcept {
-      InstStream -= offset;
-      AdjustedInstStream -= offset;
+      InstStream = reinterpret_cast<const uint8_t*>(reinterpret_cast<uint64_t>(InstStream) - offset);
+      AdjustedInstStream = reinterpret_cast<const uint8_t*>(reinterpret_cast<uint64_t>(AdjustedInstStream) - offset);
       return *this;
     }
 
     DecodeStream& operator+=(size_t offset) noexcept {
-      InstStream += offset;
-      AdjustedInstStream += offset;
+      InstStream = reinterpret_cast<const uint8_t*>(reinterpret_cast<uint64_t>(InstStream) + offset);
+      AdjustedInstStream = reinterpret_cast<const uint8_t*>(reinterpret_cast<uint64_t>(AdjustedInstStream) + offset);
       return *this;
     }
   };

@@ -39,6 +39,12 @@ public:
   virtual ExecutableRangeInfo QueryGuestExecutableRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Address) = 0;
   virtual std::optional<ExecutableFileSectionInfo> LookupExecutableFileSection(Core::InternalThreadState* Thread, uint64_t GuestAddr) = 0;
 
+  // Compile-only clients keep guest instruction bytes outside the guest VA:
+  // return the host bytes for [Address, Address+Size), or nullptr if not available.
+  virtual const uint8_t* ResolveGuestCodePointer(uint64_t Address, uint64_t Size, const uint8_t* Fallback) {
+    return Fallback;
+  }
+
   virtual void PreCompile() {}
 
   virtual SourcecodeResolver* GetSourcecodeResolver() {

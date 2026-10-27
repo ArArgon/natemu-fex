@@ -128,9 +128,11 @@ uint8_t Decoder::ReadByte() {
 }
 
 std::optional<uint8_t> Decoder::PeekByte(uint8_t Offset) {
-  uint64_t ByteAddress = reinterpret_cast<uint64_t>(InstStream.InstStream + InstructionSize + Offset);
+  uint64_t ByteAddress = reinterpret_cast<uint64_t>(InstStream.InstStream) + InstructionSize + Offset;
   if (CheckRangeExecutable(ByteAddress, 1)) {
-    return InstStream.AdjustedInstStream[InstructionSize + Offset];
+    const auto* Source = CTX->SyscallHandler->ResolveGuestCodePointer(ByteAddress, 1, reinterpret_cast<const uint8_t*>(reinterpret_cast<uint64_t>(InstStream.AdjustedInstStream) + InstructionSize + Offset));
+    if (!Source) return std::nullopt;
+    return *Source;
   } else {
     return std::nullopt;
   }
@@ -140,11 +142,13 @@ std::pair<uint64_t, bool> Decoder::ReadData(uint8_t Size) {
   LOGMAN_THROW_A_FMT(Size != 0 && Size <= sizeof(uint64_t), "Unknown data size to read");
 
   uint64_t Res = 0;
-  uint64_t Address = reinterpret_cast<uint64_t>(InstStream.InstStream + InstructionSize);
+  uint64_t Address = reinterpret_cast<uint64_t>(InstStream.InstStream) + InstructionSize;
   LastFieldReadOffset = (uint8_t)InstructionSize;
   LastFieldReadSize = Size;
   if (CheckRangeExecutable(Address, Size)) {
-    std::memcpy(&Res, &InstStream.AdjustedInstStream[InstructionSize], Size);
+    const auto* Source = CTX->SyscallHandler->ResolveGuestCodePointer(Address, Size, reinterpret_cast<const uint8_t*>(reinterpret_cast<uint64_t>(InstStream.AdjustedInstStream) + InstructionSize));
+    if (!Source) { HitNonExecutableRange = true; return {0, false}; }
+    std::memcpy(&Res, Source, Size);
   } else {
     HitNonExecutableRange = true;
     // See PeekByte, this specific case may cause some executable memory to read as 0 but it doesn't matter as the entire instruction will be rolled back anyway.
@@ -1361,14 +1365,14 @@ const Decoder::DecodeStream Decoder::AdjustAddrForSpecialRegion(const uint8_t* _
     // Offset 0x800: vgetcpu
     uint64_t Offset = RIP - VSyscall_Base;
     return DecodeStream {
-      .InstStream = _InstStream - EntryPoint + RIP,
+      .InstStream = reinterpret_cast<const uint8_t*>(reinterpret_cast<uint64_t>(_InstStream) - EntryPoint + RIP),
       .AdjustedInstStream = VSyscallData + Offset,
     };
   }
 
   return DecodeStream {
-    .InstStream = _InstStream - EntryPoint + RIP,
-    .AdjustedInstStream = _InstStream - EntryPoint + RIP,
+    .InstStream = reinterpret_cast<const uint8_t*>(reinterpret_cast<uint64_t>(_InstStream) - EntryPoint + RIP),
+    .AdjustedInstStream = reinterpret_cast<const uint8_t*>(reinterpret_cast<uint64_t>(_InstStream) - EntryPoint + RIP),
   };
 }
 
