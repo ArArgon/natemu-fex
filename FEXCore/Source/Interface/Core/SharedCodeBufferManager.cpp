@@ -22,8 +22,8 @@ CodeBuffer::CodeBuffer(size_t Size, bool ShouldBeNamed)
   LOGMAN_THROW_A_FMT(!!Ptr, "Couldn't allocate code buffer");
 
   // Protect the last page of the allocated buffer to trigger SIGSEGV on write access
-  uintptr_t LastPageAddr = AlignDown(reinterpret_cast<uintptr_t>(Ptr) + Size - 1, FEXCore::Utils::FEX_PAGE_SIZE);
-  if (!FEXCore::Allocator::VirtualProtect(reinterpret_cast<void*>(LastPageAddr), FEXCore::Utils::FEX_PAGE_SIZE,
+  uintptr_t LastPageAddr = AlignDown(reinterpret_cast<uintptr_t>(Ptr) + Size - 1, FEXC_HOST_PAGE_SIZE);
+  if (!FEXCore::Allocator::VirtualProtect(reinterpret_cast<void*>(LastPageAddr), FEXC_HOST_PAGE_SIZE,
                                           FEXCore::Allocator::ProtectOptions::None)) {
     LogMan::Msg::EFmt("Failed to mprotect last page of code buffer.");
   }

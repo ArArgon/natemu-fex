@@ -229,7 +229,12 @@ size_t malloc_usable_size(void* ptr) {
   return ::malloc_usable_size(ptr);
 }
 void* aligned_alloc(size_t a, size_t s) {
+#ifdef __APPLE__
+  void* p = nullptr;
+  return ::posix_memalign(&p, a < sizeof(void*) ? sizeof(void*) : a, s ? s : 1) ? nullptr : p;
+#else
   return ::aligned_alloc(a, s);
+#endif
 }
 void aligned_free(void* ptr) {
   return ::free(ptr);
