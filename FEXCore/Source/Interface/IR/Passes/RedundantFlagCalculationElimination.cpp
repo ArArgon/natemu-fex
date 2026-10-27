@@ -17,6 +17,7 @@ $end_info$
 #include <FEXCore/Utils/Profiler.h>
 #include <FEXCore/fextl/deque.h>
 #include <FEXCore/fextl/vector.h>
+#include <fexc_precision.h>
 
 // Flag bit flags
 #define FLAG_V (1U << 0)
@@ -344,6 +345,9 @@ constexpr auto FlagInfos = [] {
 }();
 
 FlagInfo DeadFlagCalculationEliminination::Classify(IROp_Header* IROp) {
+  if (fexc_slice1 && FexcPrecision::GuestMemOp(IROp->Op)) {
+    return FlagInfo::Pack({.Read = FLAG_ALL});
+  }
   FlagInfo Info = FlagInfos[IROp->Op];
   if (!Info.Special()) {
     return Info;
@@ -447,7 +451,7 @@ FlagInfo DeadFlagCalculationEliminination::Classify(IROp_Header* IROp) {
 // be skipped (because it was removed or could not possibly affect flags).
 bool DeadFlagCalculationEliminination::EliminateDeadCode(IREmitter* IREmit, Ref CodeNode, IROp_Header* IROp) {
   // Can't remove anything used or with side effects.
-  if (CodeNode->GetUses() > 0 || IR::HasSideEffects(IROp->Op)) {
+  if (CodeNode->GetUses() > 0 || IR::HasSideEffects(IROp->Op) || (fexc_slice1 && FexcPrecision::GuestMemOp(IROp->Op))) {
     return false;
   }
 
@@ -543,9 +547,23 @@ bool DeadFlagCalculationEliminination::ProcessBlock(IREmitter* IREmit, IRListVie
     FlagsRead = CFG.Get(ExitOp->Args[0])->Flags;
   }
 
+  bool HasAccess = false;
   // Iterate the block in reverse
   while (true) {
     auto [CodeNode, IROp] = CodeLast();
+
+    // slice1: the incoming flags are live at the start of every instruction that has a guest memory access (the access
+    // reads them; an InvalidateFlags of the same instruction must not hide them from the instruction start).
+    if (fexc_slice1) {
+      if (FexcPrecision::GuestMemOp(IROp->Op)) {
+        HasAccess = true;
+      } else if (IROp->Op == OP_GUESTOPCODE) {
+        if (HasAccess) {
+          FlagsRead |= FLAG_ALL;
+        }
+        HasAccess = false;
+      }
+    }
 
     // Optimizing flags can cause earlier flag reads to become dead but dead
     // flag reads should not impede optimiation of earlier dead flag writes.
@@ -685,6 +703,29 @@ void DeadFlagCalculationEliminination::Run(IREmitter* IREmit) {
 
   auto CurrentIR = IREmit->ViewIR();
   fextl::deque<uint32_t> Worklist;
+
+  if (fexc_slice1) {
+    Ref Guest = nullptr;
+    bool Writer = false, Saved = false;
+    for (auto [BlockNode, BlockHeader] : CurrentIR.GetBlocks()) {
+      for (auto [CodeNode, IROp] : CurrentIR.GetCode(BlockNode)) {
+        if (IROp->Op == OP_GUESTOPCODE) {
+          Guest = CodeNode;
+          Writer = Saved = false;
+        } else if (FexcPrecision::GuestMemOp(IROp->Op)) {
+          if (Writer && !Saved && Guest) {
+            auto Cursor = IREmit->GetWriteCursor();
+            IREmit->SetWriteCursor(Guest);
+            IREmit->_StoreContext(OpSize::i32Bit, RegClass::GPR, IREmit->_LoadNZCV(), FexcPrecision::PreNzcvOffset);
+            IREmit->SetWriteCursor(Cursor);
+            Saved = true;
+          }
+        } else if (IROp->Op != OP_INVALIDATEFLAGS && ((Classify(IROp).Write() & FLAG_NZCV) || IR::ImplicitFlagClobber(IROp->Op))) {
+          Writer = true;
+        }
+      }
+    }
+  }
 
   // Initialize CFG
   ControlFlowGraph CFG {.IR = CurrentIR};

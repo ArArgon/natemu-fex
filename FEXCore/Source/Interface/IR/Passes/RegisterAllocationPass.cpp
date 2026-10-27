@@ -16,6 +16,7 @@ $end_info$
 #include <FEXCore/Utils/LogManager.h>
 #include <FEXCore/Utils/Profiler.h>
 #include <FEXCore/fextl/vector.h>
+#include <fexc_precision.h>
 #include <bit>
 #include <cstdint>
 
@@ -633,6 +634,23 @@ void ConstrainedRAPass::Run(IREmitter* IREmit_) {
           }
         }
 
+        if (fexc_slice1 && (FexcPrecision::GuestMemOp(IROp->Op) || IROp->Op == OP_GUESTOPCODE)) {
+          if (IROp->Op == OP_LOADMEM || IROp->Op == OP_LOADMEMTSO) {
+            PreferredReg[IR->GetID(CodeNode).Value] = PhysicalRegister::Invalid();
+          }
+          PhysicalRegister Keep = PhysicalRegister::Invalid();
+          if (IROp->Op == OP_POP) {
+            Keep = PreferredReg[IROp->C<IR::IROp_Pop>()->InoutAddr.ID().Value];
+          }
+          for (auto C : {RegClass::GPRFixed, RegClass::FPRFixed}) {
+            for (uint8_t r = 0; r < Classes[FEXCore::ToUnderlying(C)].Count; ++r) {
+              if (!(Keep == PhysicalRegister(C, r))) {
+                Classes[FEXCore::ToUnderlying(C)].RegToSSA[r] = CodeNode;
+              }
+            }
+          }
+        }
+
         const int NumArgs = IR::GetRAArgs(IROp->Op);
         for (int i = NumArgs - 1; i >= 0; --i) {
           const auto& Arg = IROp->Args[i];
@@ -667,6 +685,9 @@ void ConstrainedRAPass::Run(IREmitter* IREmit_) {
       // Since we'd be doing this check anyway for merging, do the check now so
       // we can skip the rest of the logic too.
       if (IROp->Op == OP_GUESTOPCODE || IROp->Op == OP_INLINECONSTANT) {
+        if (fexc_slice1 && IROp->Op == OP_GUESTOPCODE) {
+          LastNode = nullptr;
+        }
         continue;
       }
 
@@ -761,6 +782,9 @@ void ConstrainedRAPass::Run(IREmitter* IREmit_) {
       // Assign destinations.
       if (GetHasDest(IROp->Op) && PhysicalRegister(CodeNode).IsInvalid()) {
         AssignReg(IROp, BlockIROp, CodeNode, IROp);
+        if (fexc_slice1 && (IROp->Op == OP_LOADMEM || IROp->Op == OP_LOADMEMTSO) && CodeNode->GetUses() == 0) {
+          FreeReg(PhysicalRegister(CodeNode));
+        }
       }
 
       if (IsTrivial(CodeNode, IROp)) {
