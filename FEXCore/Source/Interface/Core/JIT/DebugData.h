@@ -5,6 +5,7 @@
 #include <FEXCore/fextl/vector.h>
 
 #include <cstdint>
+#include <utility>
 
 namespace FEXCore::CPU {
 union Relocation;
@@ -31,5 +32,13 @@ struct DebugData : public FEXCore::Allocator::FEXAllocOperators {
   fextl::vector<DebugDataSubblock> Subblocks;
   fextl::vector<DebugDataGuestOpcode> GuestOpcodes;
   fextl::vector<FEXCore::CPU::Relocation>* Relocations;
+
+  // natemu additions: {guest entry offset, native offset where the entry prologue ends}
+  // for every FEX entry point, and the static register map used for this compile.
+  fextl::vector<std::pair<uint64_t, uint64_t>> FexcEntryPrologues;
+  uint8_t FexcSRAGPR[18] {};
+  uint8_t FexcSRAGPRCount {};
+  uint8_t FexcSRAFPR[16] {};
+  uint8_t FexcSRAFPRCount {};
 };
 } // namespace FEXCore::Core

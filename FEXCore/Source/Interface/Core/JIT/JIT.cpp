@@ -1002,6 +1002,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
         DebugData->GuestOpcodes.push_back({BlockIROp->GuestEntryOffset, GetCursorAddress<uint8_t*>() - CodeData.BlockBegin});
 
         EmitEntryPoint(JITCodeHeaderLabel, CheckTF);
+        DebugData->FexcEntryPrologues.push_back({BlockIROp->GuestEntryOffset, uint64_t(GetCursorAddress<uint8_t*>() - CodeData.BlockBegin)});
       }
 
       if (PendingCallReturnTargetLabel) {
@@ -1193,6 +1194,10 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
 #endif
 
   DebugData->HostCodeSize = CodeData.Size;
+  DebugData->FexcSRAGPRCount = uint8_t(StaticRegisters.size());
+  for (size_t i = 0; i < StaticRegisters.size(); ++i) DebugData->FexcSRAGPR[i] = uint8_t(StaticRegisters[i].Idx());
+  DebugData->FexcSRAFPRCount = uint8_t(StaticFPRegisters.size());
+  for (size_t i = 0; i < StaticFPRegisters.size(); ++i) DebugData->FexcSRAFPR[i] = uint8_t(StaticFPRegisters[i].Idx());
   DebugData->Relocations = &Relocations;
 
   this->IR = nullptr;

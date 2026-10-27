@@ -1,3 +1,4 @@
+#include <fexc_hook.h>
 // SPDX-License-Identifier: MIT
 /*
 $info$
@@ -803,7 +804,7 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
 
   // Generate IR + Meta Info
   auto [IRView, TotalInstructions, TotalInstructionsLength, StartAddr, Length, NeedsAddGuestCodeRanges] =
-    GenerateIR(Thread, GuestRIP, Config.GDBSymbols(), MaxInst);
+    GenerateIR(Thread, GuestRIP, Config.GDBSymbols() || fexc_dense_pc_table, MaxInst);
   if (!IRView) {
     Thread->FrontendDecoder->ValidateDisownedOrFree();
     Thread->OpDispatcher->ValidateDisownedOrFree();
@@ -836,6 +837,10 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
   bool TFSet = Thread->CurrentFrame->State.flags[X86State::RFLAG_TF_RAW_LOC];
 
   auto CompiledCode = Thread->CPUBackend->CompileCode(GuestRIP, Length, TotalInstructions == 1, &*IRView, DebugData.get(), TFSet);
+  if (fexc_compile_hook) {
+    fexc_compile_hook(Thread, FexcCompileInfo {GuestRIP, StartAddr, Length, TotalInstructions, TotalInstructionsLength},
+                      CompiledCode.BlockBegin, CompiledCode.Size, *DebugData);
+  }
 
   // Release the IR
   Thread->OpDispatcher->DelayedDisownBuffer();
