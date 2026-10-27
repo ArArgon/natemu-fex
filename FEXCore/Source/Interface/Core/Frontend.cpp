@@ -1,3 +1,4 @@
+#include <fexc_hook.h>
 // SPDX-License-Identifier: MIT
 /*
 $info$
@@ -885,7 +886,7 @@ Decoder::DecodedBlockStatus Decoder::DecodeInstructionImpl(uint64_t PC) {
 
           // Take a peek at the op just past the displacement
           uint8_t LocalOp = ReadByte();
-          return NormalOpHeader(&FEXCore::X86Tables::DDDNowOps[LocalOp], LocalOp);
+          { DecodeInst->FexcMap = 7; return NormalOpHeader(&FEXCore::X86Tables::DDDNowOps[LocalOp], LocalOp); }
           break;
         }
       case 0x38: { // F38 Table!
@@ -915,7 +916,7 @@ Decoder::DecodedBlockStatus Decoder::DecodeInstructionImpl(uint64_t PC) {
           DecodeInst->Flags &= ~DecodeFlags::FLAG_OPERAND_SIZE;
           DecodeFlags::PopOpAddrIf(&DecodeInst->Flags, DecodeFlags::FLAG_OPERAND_SIZE_LAST);
         }
-        return NormalOpHeader(&FEXCore::X86Tables::H0F38TableOps[LocalOp], LocalOp);
+        { DecodeInst->FexcMap = 5; return NormalOpHeader(&FEXCore::X86Tables::H0F38TableOps[LocalOp], LocalOp); }
         break;
       }
       case 0x3A: { // F3A Table!
@@ -934,7 +935,7 @@ Decoder::DecodedBlockStatus Decoder::DecodeInstructionImpl(uint64_t PC) {
         }
 
         uint16_t LocalOp = (Prefix << 8) | ReadByte();
-        return NormalOpHeader(&FEXCore::X86Tables::H0F3ATableOps[LocalOp], LocalOp);
+        { DecodeInst->FexcMap = 6; return NormalOpHeader(&FEXCore::X86Tables::H0F3ATableOps[LocalOp], LocalOp); }
         break;
       }
       default:
@@ -951,25 +952,25 @@ Decoder::DecodedBlockStatus Decoder::DecodeInstructionImpl(uint64_t PC) {
 
           DecodeREXIfValid(-2);
           if (NoOverlay) { // This section of the table ignores prefix extention
-            return NormalOpHeader(&FEXCore::X86Tables::SecondBaseOps[EscapeOp], EscapeOp);
+            { DecodeInst->FexcMap = 1; return NormalOpHeader(&FEXCore::X86Tables::SecondBaseOps[EscapeOp], EscapeOp); }
           } else if (LastEscapePrefix == 0xF3) { // REP
             // Remove prefix so it doesn't effect calculations.
             // This is only an escape prefix rather tan modifier now
             DecodeInst->Flags &= ~DecodeFlags::FLAG_REP_PREFIX;
-            return NormalOpHeader(&FEXCore::X86Tables::RepModOps[EscapeOp], EscapeOp);
+            { DecodeInst->FexcMap = 2; return NormalOpHeader(&FEXCore::X86Tables::RepModOps[EscapeOp], EscapeOp); }
           } else if (LastEscapePrefix == 0xF2) { // REPNE
             // Remove prefix so it doesn't effect calculations.
             // This is only an escape prefix rather tan modifier now
             DecodeInst->Flags &= ~DecodeFlags::FLAG_REPNE_PREFIX;
-            return NormalOpHeader(&FEXCore::X86Tables::RepNEModOps[EscapeOp], EscapeOp);
+            { DecodeInst->FexcMap = 3; return NormalOpHeader(&FEXCore::X86Tables::RepNEModOps[EscapeOp], EscapeOp); }
           } else if (LastEscapePrefix == 0x66 && !NoOverlay66) { // Operand Size
             // Remove prefix so it doesn't effect calculations.
             // This is only an escape prefix rather tan modifier now
             DecodeInst->Flags &= ~DecodeFlags::FLAG_OPERAND_SIZE;
             DecodeFlags::PopOpAddrIf(&DecodeInst->Flags, DecodeFlags::FLAG_OPERAND_SIZE_LAST);
-            return NormalOpHeader(&FEXCore::X86Tables::OpSizeModOps[EscapeOp], EscapeOp);
+            { DecodeInst->FexcMap = 4; return NormalOpHeader(&FEXCore::X86Tables::OpSizeModOps[EscapeOp], EscapeOp); }
           } else {
-            return NormalOpHeader(&FEXCore::X86Tables::SecondBaseOps[EscapeOp], EscapeOp);
+            { DecodeInst->FexcMap = 1; return NormalOpHeader(&FEXCore::X86Tables::SecondBaseOps[EscapeOp], EscapeOp); }
           }
           break;
         }
@@ -1032,6 +1033,7 @@ Decoder::DecodedBlockStatus Decoder::DecodeInstructionImpl(uint64_t PC) {
           DecodeInst->REXIndex = InstructionSize;
         } else {
           DecodeREXIfValid();
+          DecodeInst->FexcMap = 0;
           return NormalOpHeader(Info, Op);
         }
 

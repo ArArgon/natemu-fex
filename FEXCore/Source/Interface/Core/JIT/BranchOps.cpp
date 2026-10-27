@@ -1,3 +1,4 @@
+#include <fexc_hook.h>
 // SPDX-License-Identifier: MIT
 /*
 $info$
@@ -55,7 +56,7 @@ DEF_OP(ExitFunction) {
 
   uint64_t NewRIP;
 
-  if constexpr (Context::BLOCK_DEBUGGING) {
+  if (fexc_slice1 || Context::BLOCK_DEBUGGING) {
     // Skip block linking when BLOCK_DEBUGGING as it adds overhead and is unncessary.
     // This is a debug only feature and doesn't need caching help.
     bool IsInlineRIP = IsInlineConstant(Op->NewRIP, &NewRIP) || IsInlineEntrypointOffset(Op->NewRIP, &NewRIP);
@@ -72,7 +73,7 @@ DEF_OP(ExitFunction) {
 
     if (IsInlineRIP) {
       BindOrRestart(&l_ExitLink);
-      dc64(NewRIP);
+      PlaceNamedSymbolLiteral(InsertGuestRIPLiteral(NewRIP));
     }
 
     return;

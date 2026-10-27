@@ -519,11 +519,14 @@ bool ContextImpl::CheckIfBlockIsCacheable(FEXCore::Core::InternalThreadState& Th
   return Thread.FrontendDecoder->CheckIfCacheable(Thread, reinterpret_cast<const uint8_t*>(GuestRIP), GuestRIP, MaxInst);
 }
 
+#include <fexc_slice1.inc>
+
 ContextImpl::GenerateIRResult
 ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestRIP, bool ExtendedDebugInfo, uint64_t MaxInst) {
   FEXCORE_PROFILE_SCOPED("GenerateIR");
 
   Thread->OpDispatcher->ResetWorkingList();
+  fexc_cut = {};
 
   uint64_t TotalInstructions {0};
   uint64_t TotalInstructionsLength {0};
@@ -609,6 +612,15 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
 
         TableInfo = Block.DecodedInstructions[i].TableInfo;
         DecodedInfo = &Block.DecodedInstructions[i];
+
+        if (fexc_slice1 && FexcSlice1::Cut(Block.BlockStatus, i + 1 == InstsInBlock, BlockInstructionsLength == 0, *DecodedInfo, InstAddress)) {
+          if (!BlockInstructionsLength) {
+            Thread->OpDispatcher->DelayedDisownBuffer();
+            return {std::nullopt, 0, 0, 0, 0};
+          }
+          Thread->OpDispatcher->ExitFunction(Thread->OpDispatcher->_InlineEntrypointOffset(GPRSize, InstAddress - GuestRIP));
+          break;
+        }
 
 #ifdef ZYDIS_DISASSEMBLER
         if (FEXCore::Config::Get_X86DISASSEMBLE()) {

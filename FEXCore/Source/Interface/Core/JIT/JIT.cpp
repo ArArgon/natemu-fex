@@ -1076,7 +1076,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
   }
 
   BindOrRestart(&l_ExitLink);
-  PlaceNamedSymbolLiteral(InsertNamedSymbolLiteral(RelocNamedSymbolLiteral::NamedSymbol::SYMBOL_LITERAL_EXITFUNCTION_LINKER));
+  if (!fexc_slice1) PlaceNamedSymbolLiteral(InsertNamedSymbolLiteral(RelocNamedSymbolLiteral::NamedSymbol::SYMBOL_LITERAL_EXITFUNCTION_LINKER));
 
   // CodeSize not including the header or tail data.
   const uint64_t CodeOnlySize = GetCursorAddress<uint8_t*>() - CodeBegin;

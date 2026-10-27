@@ -241,6 +241,7 @@ struct DecodedInst {
   uint8_t SIB;
   uint8_t InstSize;
   int8_t REXIndex;
+  uint8_t FexcMap; // natemu: FexcMap (shim/fexc_hook.h) that produced this instruction
 };
 
 union ModRMDecoded {
