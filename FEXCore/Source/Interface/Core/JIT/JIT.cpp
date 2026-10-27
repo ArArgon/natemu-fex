@@ -910,6 +910,8 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
   fexc_insns.clear();
   DebugData->FexcEntryPrologues.clear();
   FexcGuest = FexcInsnNative = 0; FexcCf = true; FexcNzcvWritten = FexcNzcvSaved = FexcStoreSeen = false; FexcLoadSite = -1; FexcPendingFused.clear();
+  FexcStubs.clear(); FexcPendingLink.clear(); FexcTargetsDone = 0;
+  DebugData->GuestOpcodes.clear(); DebugData->Subblocks.clear();   // natemu: per attempt (a far-branch restart re-emits them)
   JumpTargets.clear();
   CallReturnTargets.clear();
   PendingJumpThunks.clear();
@@ -1021,6 +1023,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
     }
 
     for (auto [CodeNode, IROp] : IR->GetCode(BlockNode)) {
+      if (fexc_slice1) FexcBeforeOp(IROp, CodeNode);
       const uint32_t FexcBegin = uint32_t(GetCursorAddress<uint8_t*>() - CodeData.BlockBegin);
       switch (IROp->Op) {
 #define REGISTER_OP(op, x) \
@@ -1047,6 +1050,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
     b_OrRestart(PendingTargetLabel);
   }
   PendingTargetLabel = nullptr;
+  if (fexc_slice1) FexcEmitStubs();
 
   ARMEmitter::ForwardLabel l_ExitLink;
   for (auto& PendingJumpThunk : PendingJumpThunks) {

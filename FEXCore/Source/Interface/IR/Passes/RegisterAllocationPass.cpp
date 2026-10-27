@@ -579,6 +579,9 @@ void ConstrainedRAPass::Run(IREmitter* IREmit_) {
   IREmit = IREmit_;
   auto IR_ = IREmit->ViewIR();
   IR = &IR_;
+  if (fexc_slice1) {
+    FexcPrecision::Prescan(IR_);
+  }
 
   PreferredReg.resize(IR->GetSSACount(), PhysicalRegister::Invalid());
   SSAToReg.resize(IR->GetSSACount(), PhysicalRegister::Invalid());

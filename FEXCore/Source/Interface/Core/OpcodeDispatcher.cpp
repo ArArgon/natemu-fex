@@ -7,6 +7,7 @@ $end_info$
 */
 
 #include "FEXCore/Core/HostFeatures.h"
+#include <fexc_hook.h>
 #include "FEXCore/Utils/Telemetry.h"
 #include "Interface/Context/Context.h"
 #include "Interface/Core/OpcodeDispatcher.h"
@@ -108,6 +109,21 @@ void OpDispatchBuilder::NOPOp(OpcodeArgs) {}
 
 void OpDispatchBuilder::RETOp(OpcodeArgs) {
   const auto GPRSize = GetGPROpSize();
+
+  if (fexc_slice1) {
+    // natemu slice1: load the return address without writeback, so the JIT's branch-target check (a non-canonical
+    // target raises #GP(0) at the ret) runs before RSP is committed; then commit RSP and exit.
+    Ref SP = LoadGPRRegister(X86State::REG_RSP);
+    Ref NewRIP = _LoadMem(RegClass::GPR, GPRSize, SP, Invalid(), OpSize::i8Bit, MemOffsetType::SXTX, 1);
+    SP = Add(GPRSize, SP, IR::OpSizeToSize(GPRSize));
+    if (Op->OP == 0xC2) {
+      SP = Add(GPRSize, SP, LoadSourceGPR(Op, Op->Src[0], Op->Flags));
+    }
+    StoreGPRRegister(X86State::REG_RSP, SP);
+    ExitFunction(NewRIP, BranchHint::Return);
+    BlockSetRIP = true;
+    return;
+  }
 
   Ref SP = _RMWHandle(LoadGPRRegister(X86State::REG_RSP));
   Ref NewRIP = Pop(GPRSize, SP);

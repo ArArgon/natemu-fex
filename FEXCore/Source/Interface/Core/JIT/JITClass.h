@@ -538,6 +538,17 @@ private:
 
   // natemu (fexc): access-site recording, defined in shim/fexc_sites.inc (included from MemoryOps.cpp).
   void FexcAfterOp(const IR::IROp_Header* IROp, IR::Ref Node, uint32_t Begin);
+  void FexcRecordOp(const IR::IROp_Header* IROp, IR::Ref Node, uint32_t Begin);
+  // natemu (fexc), profile slice1: address guard, split-store check and branch-target check, with out-of-line brk stubs
+  // whose PCs are guard/split sites (same file).
+  void FexcBeforeOp(const IR::IROp_Header* IROp, IR::Ref Node);
+  void FexcCheckTarget(IR::Ref Node);
+  void FexcEmitStubs();
+  ARMEmitter::ForwardLabel* FexcStub(uint8_t Kind, bool Link);
+  // (targets and RIP-relative accesses come from FexcPrecision::Prescan, run before register allocation)
+  fextl::map<size_t, ARMEmitter::ForwardLabel> FexcStubs;   // guard/split site index -> its stub
+  fextl::vector<size_t> FexcPendingLink;                    // guard/split sites waiting for their access's native offset
+  uint32_t FexcTargetsDone {};                              // branch-target checks emitted (all of Prescan's, or the compile dies)
   uint32_t FexcGuest {}, FexcInsnNative {};
   bool FexcCf {true}, FexcNzcvWritten {}, FexcNzcvSaved {}, FexcStoreSeen {};
   int FexcLoadSite {-1};

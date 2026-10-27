@@ -1478,7 +1478,9 @@ DEF_OP(Push) {
 
   bool NeedsMoveAfterwards = false;
   if (Dst != AddrSrc) {
-    if (Dst == Src) {
+    if (Dst == Src || fexc_slice1) {
+      // natemu slice1: also here, store from the unchanged base and set Dst afterwards, so nothing is written between
+      // the address/split checks and the store (a split stub completes the store with the base it was checked on).
       NeedsMoveAfterwards = true;
       // Need to be careful here, incoming source might be reused afterwards.
     } else {
@@ -1487,7 +1489,11 @@ DEF_OP(Push) {
     }
   }
 
-  if (Src == AddrSrc) {
+  if (Src == AddrSrc && fexc_slice1) {
+    // natemu slice1: `stur Src, [Src, #-n]` then `sub` has no writeback, so the value can be stored from its own register
+    // (the access records the register it actually stores) instead of a TMP1 copy.
+    NeedsMoveAfterwards = true;
+  } else if (Src == AddrSrc) {
     // If the data source is the address source then we need to do some additional work.
     // This is because it is undefined behaviour to do a writeback on store operation where dest == src.
     // In the case of writeback where the source is the address there are multiple behaviours.
