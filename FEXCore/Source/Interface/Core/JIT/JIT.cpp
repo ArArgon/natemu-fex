@@ -1,3 +1,4 @@
+#include <fexc_hook.h>
 // SPDX-License-Identifier: MIT
 /*
 $info$
@@ -905,6 +906,10 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
   }
 
   uint32_t SSACount = IR->GetSSACount();
+  fexc_sites.clear();
+  fexc_insns.clear();
+  DebugData->FexcEntryPrologues.clear();
+  FexcGuest = FexcInsnNative = 0; FexcCf = true; FexcNzcvWritten = FexcNzcvSaved = FexcStoreSeen = false; FexcLoadSite = -1; FexcPendingFused.clear();
   JumpTargets.clear();
   CallReturnTargets.clear();
   PendingJumpThunks.clear();
@@ -1016,6 +1021,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
     }
 
     for (auto [CodeNode, IROp] : IR->GetCode(BlockNode)) {
+      const uint32_t FexcBegin = uint32_t(GetCursorAddress<uint8_t*>() - CodeData.BlockBegin);
       switch (IROp->Op) {
 #define REGISTER_OP(op, x) \
   case FEXCore::IR::IROps::OP_##op: Op_##x(IROp, CodeNode); break
@@ -1026,6 +1032,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
 
       default: Op_Unhandled(IROp, CodeNode); break;
       }
+      FexcAfterOp(IROp, CodeNode, FexcBegin);
     }
 
     DebugData->Subblocks.push_back({static_cast<uint32_t>(BlockStartHostCode - CodeData.BlockBegin),
@@ -1194,6 +1201,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
 #endif
 
   DebugData->HostCodeSize = CodeData.Size;
+  fexc_spill_bytes = uint32_t(SpillSlots * MaxSpillSlotSize);
   DebugData->FexcSRAGPRCount = uint8_t(StaticRegisters.size());
   for (size_t i = 0; i < StaticRegisters.size(); ++i) DebugData->FexcSRAGPR[i] = uint8_t(StaticRegisters[i].Idx());
   DebugData->FexcSRAFPRCount = uint8_t(StaticFPRegisters.size());

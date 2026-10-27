@@ -1,3 +1,5 @@
+#include <fexc_hook.h>
+#include <cstring>
 // SPDX-License-Identifier: MIT
 /*
 $info$
@@ -16,6 +18,8 @@ $end_info$
 #include <FEXCore/Utils/MathUtils.h>
 
 namespace FEXCore::CPU {
+
+#include <fexc_sites.inc>
 
 DEF_OP(LoadContext) {
   const auto Op = IROp->C<IR::IROp_LoadContext>();

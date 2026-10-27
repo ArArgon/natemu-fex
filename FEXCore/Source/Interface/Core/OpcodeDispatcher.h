@@ -145,6 +145,8 @@ public:
     SetCurrentCodeBlock(it->second.BlockEntry);
   }
 
+  bool FexcCFInverted() const { return CFInverted; }
+
   void StartNewBlock() {
     // If we loaded flags but didn't change them, invalidate the cached copy and move on.
     // Changes get stored out by CalculateDeferredFlags.

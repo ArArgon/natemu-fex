@@ -535,6 +535,13 @@ private:
   FEXCore::Core::DebugData* DebugData {};
 
   void ResetStack();
+
+  // natemu (fexc): access-site recording, defined in shim/fexc_sites.inc (included from MemoryOps.cpp).
+  void FexcAfterOp(const IR::IROp_Header* IROp, IR::Ref Node, uint32_t Begin);
+  uint32_t FexcGuest {}, FexcInsnNative {};
+  bool FexcCf {true}, FexcNzcvWritten {}, FexcNzcvSaved {}, FexcStoreSeen {};
+  int FexcLoadSite {-1};
+  fextl::vector<size_t> FexcPendingFused;
   /**
    * @name Relocations
    * @{ */

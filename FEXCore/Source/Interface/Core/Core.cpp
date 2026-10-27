@@ -640,6 +640,7 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
         Thread->OpDispatcher->FlushRegisterCache(true);
 
         if (ExtendedDebugInfo || Thread->OpDispatcher->CanHaveSideEffects(TableInfo, DecodedInfo)) {
+          fexc_cf_inverted[InstAddress - GuestRIP] = Thread->OpDispatcher->FexcCFInverted();
           Thread->OpDispatcher->_GuestOpcode(InstAddress - GuestRIP);
         }
 
