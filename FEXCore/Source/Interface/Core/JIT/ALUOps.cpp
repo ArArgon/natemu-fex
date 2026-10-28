@@ -938,13 +938,16 @@ DEF_OP(Div) {
       mov(EmitSize, TMP2, Lower);
       mov(EmitSize, TMP3, Divisor);
 
-      ldr(TMP4, STATE, offsetof(FEXCore::Core::CpuStateFrame, Pointers.LDIVHandler));
-
-      str<ARMEmitter::IndexType::PRE>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, -16);
-      blr(TMP4);
-      ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
       if (fexc_slice1) {
-        FexcDivAfterCall(); // natemu: #DE reported by the resident helper
+        // natemu: the resident divides (x0-x2 in and out, nothing else changes) and reports #DE in x2.
+        svc(FEXC_SVC_DIV_S);
+        FexcDivAfterCall();
+      } else {
+        ldr(TMP4, STATE, offsetof(FEXCore::Core::CpuStateFrame, Pointers.LDIVHandler));
+
+        str<ARMEmitter::IndexType::PRE>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, -16);
+        blr(TMP4);
+        ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
       }
 
       // Move results to the destination registers
@@ -1024,13 +1027,16 @@ DEF_OP(UDiv) {
       mov(EmitSize, TMP2, Lower);
       mov(EmitSize, TMP3, Divisor);
 
-      ldr(TMP4, STATE, offsetof(FEXCore::Core::CpuStateFrame, Pointers.LUDIVHandler));
-
-      str<ARMEmitter::IndexType::PRE>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, -16);
-      blr(TMP4);
-      ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
       if (fexc_slice1) {
-        FexcDivAfterCall(); // natemu: #DE reported by the resident helper
+        // natemu: the resident divides (x0-x2 in and out, nothing else changes) and reports #DE in x2.
+        svc(FEXC_SVC_DIV_U);
+        FexcDivAfterCall();
+      } else {
+        ldr(TMP4, STATE, offsetof(FEXCore::Core::CpuStateFrame, Pointers.LUDIVHandler));
+
+        str<ARMEmitter::IndexType::PRE>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, -16);
+        blr(TMP4);
+        ldr<ARMEmitter::IndexType::POST>(ARMEmitter::XReg::lr, ARMEmitter::Reg::rsp, 16);
       }
 
       // Move results to the destination registers

@@ -706,19 +706,20 @@ void DeadFlagCalculationEliminination::Run(IREmitter* IREmit) {
   fextl::deque<uint32_t> Worklist;
 
   if (fexc_slice1) {
+    fexc_pre_nzcv.clear();
     Ref Guest = nullptr;
+    uint64_t GuestOffset = 0;
     bool Writer = false, Saved = false;
     for (auto [BlockNode, BlockHeader] : CurrentIR.GetBlocks()) {
       for (auto [CodeNode, IROp] : CurrentIR.GetCode(BlockNode)) {
         if (IROp->Op == OP_GUESTOPCODE) {
           Guest = CodeNode;
+          GuestOffset = IROp->C<IROp_GuestOpcode>()->GuestEntryOffset;
           Writer = Saved = false;
         } else if (FexcPrecision::FaultPoint(IROp->Op)) {
           if (Writer && !Saved && Guest) {
-            auto Cursor = IREmit->GetWriteCursor();
-            IREmit->SetWriteCursor(Guest);
-            IREmit->_StoreContext(OpSize::i32Bit, RegClass::GPR, IREmit->_LoadNZCV(), FexcPrecision::PreNzcvOffset);
-            IREmit->SetWriteCursor(Cursor);
+            // The JIT saves the incoming NZCV in a register at the instruction start (shim/fexc_sites.inc).
+            fexc_pre_nzcv.insert(GuestOffset);
             Saved = true;
           }
         } else if (IROp->Op != OP_INVALIDATEFLAGS && ((Classify(IROp).Write() & FLAG_NZCV) || IR::ImplicitFlagClobber(IROp->Op))) {

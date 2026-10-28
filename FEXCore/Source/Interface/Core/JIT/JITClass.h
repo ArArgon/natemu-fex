@@ -548,6 +548,8 @@ private:
   // natemu (fexc), profile slice1: div/idiv #DE checks before the divide op and after FEX's LUDIV/LDIV call (same file).
   void FexcDivCheck(const IR::IROp_Header* IROp);
   void FexcDivAfterCall();
+  // natemu (fexc), profile slice1: a computed exit's branch to the resident's dispatcher (same file).
+  void FexcDispatchExit();
   // (targets and RIP-relative accesses come from FexcPrecision::Prescan, run before register allocation)
   fextl::map<size_t, ARMEmitter::ForwardLabel> FexcStubs;   // guard/split site index -> its stub
   fextl::vector<size_t> FexcPendingLink;                    // guard/split sites waiting for their access's native offset

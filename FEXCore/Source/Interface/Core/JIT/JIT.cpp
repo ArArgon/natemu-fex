@@ -802,7 +802,14 @@ void Arm64JITCore::EmitTFCheck() {
 }
 
 void Arm64JITCore::EmitSuspendInterruptCheck() {
-  if (CTX->Config.NeedsPendingInterruptFaultCheck || fexc_slice1) { // natemu slice1: the runtime stops a vCPU by protecting this page
+  if (fexc_slice1) {
+    // natemu slice1: `bl` to the vCPU's stop pad (a `ret` alone in its stage-2 granule), relocated by the resident when it
+    // places the block. A kick removes execute permission from the pad, so the next block entry stops precisely there.
+    // x30 is an RA temporary, dead at a block entry.
+    dc32(0x94000000);
+    return;
+  }
+  if (CTX->Config.NeedsPendingInterruptFaultCheck) {
     // Trigger a fault if there are any pending interrupts
     // Used only for gdbserver at the moment
     constexpr size_t InterruptPageOffset =
@@ -830,8 +837,10 @@ void Arm64JITCore::EmitSuspendInterruptCheck() {
 void Arm64JITCore::EmitEntryPoint(ARMEmitter::BackwardLabel& HeaderLabel, bool CheckTF) {
   // Get the address of the JITCodeHeader and store in to the core state.
   // Two instruction cost, each 1 cycle.
-  adr_OrRestart(TMP1, &HeaderLabel);
-  str(TMP1, STATE, offsetof(FEXCore::Core::CPUState, InlineJITBlockHeader));
+  if (!fexc_slice1) { // natemu slice1: no header store; the resident finds a block by its native PCs
+    adr_OrRestart(TMP1, &HeaderLabel);
+    str(TMP1, STATE, offsetof(FEXCore::Core::CPUState, InlineJITBlockHeader));
+  }
 
   if (CheckTF) {
     EmitTFCheck();
@@ -910,6 +919,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
   fexc_insns.clear();
   DebugData->FexcEntryPrologues.clear();
   FexcGuest = FexcInsnNative = 0; FexcCf = true; FexcNzcvWritten = FexcNzcvSaved = FexcStoreSeen = false; FexcLoadSite = -1; FexcPendingFused.clear();
+  fexc_dispatch_exits.clear();
   FexcStubs.clear(); FexcPendingLink.clear(); FexcTargetsDone = 0;
   DebugData->GuestOpcodes.clear(); DebugData->Subblocks.clear();   // natemu: per attempt (a far-branch restart re-emits them)
   JumpTargets.clear();
