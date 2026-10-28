@@ -803,10 +803,8 @@ void Arm64JITCore::EmitTFCheck() {
 
 void Arm64JITCore::EmitSuspendInterruptCheck() {
   if (fexc_slice1) {
-    // natemu slice1: `bl` to the vCPU's stop pad (a `ret` alone in its stage-2 granule), relocated by the resident when it
-    // places the block. A kick removes execute permission from the pad, so the next block entry stops precisely there.
-    // x30 is an RA temporary, dead at a block entry.
-    dc32(0x94000000);
+    // natemu slice1: no stop check. The resident stops a running vCPU by unlinking: its interrupt handler patches the
+    // exits of the block it interrupted (nothing on the hot path).
     return;
   }
   if (CTX->Config.NeedsPendingInterruptFaultCheck) {
