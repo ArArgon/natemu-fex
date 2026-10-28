@@ -813,6 +813,9 @@ Decoder::DecodedBlockStatus Decoder::NormalOpHeader(const FEXCore::X86Tables::X8
     }
 
     uint16_t VEXOp = ReadByte();
+    DecodeInst->FexcMap = FEXC_MAP_VEX; // natemu: the VEX map, pp, L and opcode byte (OPRaw stays the c4/c5 byte)
+    DecodeInst->FexcVexOp = uint8_t(VEXOp);
+    DecodeInst->FexcVex = uint8_t(map_select | pp << 2 | (options.L ? 16 : 0));
 #define OPD(map_select, pp, opcode) (((map_select - 1) << 10) | (pp << 8) | (opcode))
     Op = OPD(map_select, pp, VEXOp);
 #undef OPD

@@ -481,6 +481,15 @@ void OpDispatchBuilder::LEAVEOp(OpcodeArgs) {
   const auto GPRSize = GetGPROpSize();
   const auto OperandSize = (Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_OPERAND_SIZE) ? OpSize::i16Bit : GPRSize;
 
+  if (fexc_slice1) {
+    // natemu: load [RBP] first, then write RSP and RBP, so nothing is committed before the access (FEX's pop would
+    // move RBP into RSP's register before it). fexc records the load as an implicit stack (SS) access.
+    auto BP = LoadGPRRegister(X86State::REG_RBP);
+    auto Value = _LoadMemGPR(OperandSize, BP, OperandSize);
+    StoreGPRRegister(X86State::REG_RSP, Add(GPRSize, BP, IR::OpSizeToSize(OperandSize)), GPRSize);
+    StoreGPRRegister(X86State::REG_RBP, Value, OperandSize);
+    return;
+  }
   // First we move RBP in to RSP and then behave effectively like a pop
   auto SP = _RMWHandle(LoadGPRRegister(X86State::REG_RBP));
   auto NewGPR = Pop(OperandSize, SP);
@@ -1539,8 +1548,9 @@ void OpDispatchBuilder::SHLDImmediateOp(OpcodeArgs) {
     CalculateFlags_ShiftLeftImmediate(OpSizeFromSrc(Op), Res, Dest, Shift, true);
     CalculateDeferredFlags();
     StoreResultGPR(Op, Res);
-  } else if (Shift == 0 && Size == 32) {
+  } else if (Shift == 0 && (Size == 32 || (fexc_slice1 && !Op->Dest.IsGPR()))) {
     // Ensure Zext still occurs
+    // natemu: and a memory destination is still read and written back, as a shift by a count masking to 0 (x86 RMW access)
     StoreResultGPR(Op, Dest);
   }
 }
@@ -1603,8 +1613,9 @@ void OpDispatchBuilder::SHRDImmediateOp(OpcodeArgs) {
 
     StoreResultGPR(Op, Res);
     CalculateFlags_ShiftRightDoubleImmediate(OpSizeFromSrc(Op), Res, Dest, Shift);
-  } else if (Shift == 0 && Size == 32) {
+  } else if (Shift == 0 && (Size == 32 || (fexc_slice1 && !Op->Dest.IsGPR()))) {
     // Ensure Zext still occurs
+    // natemu: and a memory destination is still read and written back, as a shift by a count masking to 0 (x86 RMW access)
     StoreResultGPR(Op, Dest);
   }
 }
@@ -2844,6 +2855,13 @@ void OpDispatchBuilder::XADDOp(OpcodeArgs) {
 
     // Calculated value gets stored in dst (order is important if dst is same as src)
     StoreResultGPR(Op, Result);
+  } else if (fexc_slice1 && !(Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_LOCK)) {
+    // natemu: without LOCK, XADD m, r is a plain read-modify-write (SDM: atomic only with LOCK): load, add, store the
+    // sum, then the old value into the register, so nothing is committed before the store site.
+    Ref Old = LoadSourceGPR(Op, Op->Dest, Op->Flags);
+    Ref Sum = CalculateFlags_ADD(OpSizeFromSrc(Op), Old, Src);
+    StoreResultGPR(Op, Sum);
+    StoreResultGPR(Op, Op->Src[0], Old);
   } else {
     HandledLock = Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_LOCK;
     Dest = AppendSegmentOffset(Dest, Op->Flags);
@@ -3939,6 +3957,21 @@ void OpDispatchBuilder::CMPXCHGOp(OpcodeArgs) {
       StoreResultGPR_WithOpSize(Op, Op->Dest, DestResult, GPRSize);
     } else {
       StoreResultGPR(Op, DestResult);
+    }
+  } else if (fexc_slice1 && !(Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_LOCK)) {
+    // natemu: without LOCK, CMPXCHG m, r is a plain read-modify-write (SDM: the destination is always written, with
+    // its own value when the comparison fails); the accumulator is written after the store, on failure only.
+    Ref Src2 = LoadSourceGPR(Op, Op->Src[0], Op->Flags);
+    Ref Src3 = LoadGPRRegister(X86State::REG_RAX);
+    Ref Src3Lower = _Bfe(OpSize::i64Bit, OpSizeAsBits(Size), 0, Src3);
+    Ref Old = LoadSourceGPR(Op, Op->Dest, Op->Flags);
+    CalculateFlags_SUB(Size, Src3Lower, Old);
+    CalculateDeferredFlags();
+    StoreResultGPR(Op, NZCVSelect(OpSize::i64Bit, CondClass::EQ, Src2, Old));
+    if (GPRSize == OpSize::i64Bit && Size == OpSize::i32Bit) {
+      StoreGPRRegister(X86State::REG_RAX, NZCVSelect(OpSize::i64Bit, CondClass::EQ, Src3, Old), OpSize::i64Bit);
+    } else {
+      StoreGPRRegister(X86State::REG_RAX, Old, Size);
     }
   } else {
     Ref Src2 = LoadSourceGPR(Op, Op->Src[0], Op->Flags);

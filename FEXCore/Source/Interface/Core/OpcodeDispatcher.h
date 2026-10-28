@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Interface/Core/Frontend.h"
+#include <fexc_hook.h>
 #include "Interface/Core/X86Tables/X86Tables.h"
 #include "Interface/Core/Addressing.h"
 #include "Interface/Context/Context.h"
@@ -1202,7 +1203,9 @@ public:
       const uint64_t GPRMask = ((1ull << (AFIndex - GPR0Index + 1)) - 1) << GPR0Index;
       const uint64_t FPRMask = ((1ull << (FPR15Index - FPR0Index + 1)) - 1) << FPR0Index;
 
-      Mask &= (GPRMask | FPRMask);
+      // natemu (fexc_slice1): DF is guest state the resident banks at a fault (the guest-state page), so cld/std store it
+      // in their own instruction like a static register, never sunk to the block end or merged with a later write.
+      Mask &= (GPRMask | FPRMask | (fexc_slice1 ? 1ull << DFIndex : 0));
       Bits &= Mask;
     }
 

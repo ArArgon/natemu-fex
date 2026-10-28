@@ -242,6 +242,8 @@ struct DecodedInst {
   uint8_t InstSize;
   int8_t REXIndex;
   uint8_t FexcMap; // natemu: FexcMap (shim/fexc_hook.h) that produced this instruction
+  uint8_t FexcVexOp; // natemu: FEXC_MAP_VEX only: the opcode byte after the VEX prefix
+  uint8_t FexcVex;   // natemu: FEXC_MAP_VEX only: map_select | pp << 2 | VEX.L << 4
 };
 
 union ModRMDecoded {
