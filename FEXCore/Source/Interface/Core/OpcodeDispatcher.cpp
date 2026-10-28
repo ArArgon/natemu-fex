@@ -3256,7 +3256,99 @@ void OpDispatchBuilder::DECOp(OpcodeArgs) {
   }
 }
 
+// natemu slice1 (I2): a string instruction is one element per pass. With a REP prefix: if RCX = 0 the instruction ends
+// (a forward branch past the element; no access, flags kept); else one element (its accesses are the sites, nothing
+// written before them), RSI/RDI step by DF, RCX - 1, and the block exits to the instruction's own RIP, where the next
+// pass starts (a literal exit: the resident links it to the block that begins there, and its unlinking stop patches it,
+// so a stop or a fault lands between elements with RCX/RSI/RDI and RIP exact). REPE/REPNE CMPS/SCAS whose ZF ends the
+// repetition branch forward to the next instruction instead. No native backward branch. 64-bit addresses only (0x67 is
+// cut by the allowlist); ES:RDI takes no segment override, the DS:RSI source of MOVS/LODS/CMPS takes FS/GS.
+// CMPS reads [RDI] then [RSI] (FEX's and QEMU's order; the SDM gives none).
+void OpDispatchBuilder::FexcStringOp(OpcodeArgs, FexcString Kind) {
+  const auto Size = OpSizeFromSrc(Op);
+  const unsigned Bytes = IR::OpSizeToSize(Size);
+  const bool Repeat = Op->Flags & (FEXCore::X86Tables::DecodeFlags::FLAG_REP_PREFIX | FEXCore::X86Tables::DecodeFlags::FLAG_REPNE_PREFIX);
+  const bool Compare = Kind == FexcString::SCAS || Kind == FexcString::CMPS;
+  const bool UsesRSI = Kind == FexcString::MOVS || Kind == FexcString::LODS || Kind == FexcString::CMPS;
+  const bool UsesRDI = Kind != FexcString::LODS;
+  auto Load = [&](Ref Addr) { return _LoadMem(RegClass::GPR, Size, Addr, Invalid(), OpSize::i8Bit, MemOffsetType::SXTX, 1); };
+
+  IRPair<IROp_CondJump> Done;
+  if (Repeat) {
+    Done = CondJump(LoadGPRRegister(X86State::REG_RCX), CondClass::EQ);
+    auto Body = CreateNewCodeBlockAfter(GetCurrentBlock());
+    SetFalseJumpTarget(Done, Body);
+    SetCurrentCodeBlock(Body);
+    StartNewBlock();
+  }
+
+  Ref RSI = UsesRSI ? LoadGPRRegister(X86State::REG_RSI) : nullptr;
+  Ref RDI = UsesRDI ? LoadGPRRegister(X86State::REG_RDI) : nullptr;
+  Ref Source = UsesRSI ? AppendSegmentOffset(RSI, Op->Flags, FEXCore::X86Tables::DecodeFlags::FLAG_DS_PREFIX) : nullptr;
+  switch (Kind) {
+  case FexcString::MOVS: {
+    fexc_movs.insert(Op->PC);   // two memory operands, not a read-modify-write (the site recorder)
+    auto Value = Load(Source);
+    _StoreMem(RegClass::GPR, Size, Value, RDI, Invalid(), OpSize::i8Bit, MemOffsetType::SXTX, 1);
+    break;
+  }
+  case FexcString::STOS:
+    _StoreMem(RegClass::GPR, Size, LoadGPRRegister(X86State::REG_RAX, Size, 0, true), RDI, Invalid(), OpSize::i8Bit, MemOffsetType::SXTX, 1);
+    break;
+  case FexcString::LODS: StoreGPRResultWithZExtSemantics(X86State::REG_RAX, Load(Source), Size); break;
+  case FexcString::SCAS: {
+    auto Memory = Load(RDI);
+    CalculateFlags_SUB(Size, LoadGPRRegister(X86State::REG_RAX, Size, 0, true), Memory);
+    break;
+  }
+  case FexcString::CMPS: {
+    auto Destination = Load(RDI);
+    CalculateFlags_SUB(Size, Load(Source), Destination);
+    break;
+  }
+  }
+  if (UsesRDI) {
+    StoreGPRRegister(X86State::REG_RDI, OffsetByDir(RDI, Bytes));
+  }
+  if (UsesRSI) {
+    StoreGPRRegister(X86State::REG_RSI, OffsetByDir(RSI, Bytes));
+  }
+  if (!Repeat) {
+    return;
+  }
+  StoreGPRRegister(X86State::REG_RCX, Sub(OpSize::i64Bit, LoadGPRRegister(X86State::REG_RCX), 1));
+
+  IRPair<IROp_Jump> Stopped;
+  if (Compare) {
+    // REPE (F3) repeats while ZF = 1, REPNE (F2) while ZF = 0.
+    const bool REPE = Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_REP_PREFIX;
+    auto Ends = CondJumpNZCV(REPE ? CondClass::NEQ : CondClass::EQ);
+    auto Again = CreateNewCodeBlockAfter(GetCurrentBlock());
+    SetFalseJumpTarget(Ends, Again);
+    SetCurrentCodeBlock(Again);
+    StartNewBlock();
+    ExitRelocatedPC(Op, -int64_t(Op->InstSize));
+    auto Stop = CreateNewCodeBlockAfter(Again);
+    SetTrueJumpTarget(Ends, Stop);
+    SetCurrentCodeBlock(Stop);
+    StartNewBlock();
+    Stopped = Jump();
+  } else {
+    ExitRelocatedPC(Op, -int64_t(Op->InstSize));
+  }
+  auto Next = CreateNewCodeBlockAfter(GetCurrentBlock());
+  SetTrueJumpTarget(Done, Next);
+  if (Compare) {
+    SetJumpTarget(Stopped, Next);
+  }
+  SetCurrentCodeBlock(Next);
+  StartNewBlock();
+}
+
 void OpDispatchBuilder::STOSOp(OpcodeArgs) {
+  if (fexc_slice1) {
+    return FexcStringOp(Op, FexcString::STOS);
+  }
   if (Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_ADDRESS_SIZE) {
     LogMan::Msg::EFmt("STOSOp: Can't handle address size override (OP: 0x{:04X}, Flags: 0x{:08X})", Op->OP, Op->Flags);
     DecodeFailure = true;
@@ -3302,6 +3394,9 @@ void OpDispatchBuilder::STOSOp(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::MOVSOp(OpcodeArgs) {
+  if (fexc_slice1) {
+    return FexcStringOp(Op, FexcString::MOVS);
+  }
   if (Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_ADDRESS_SIZE) {
     LogMan::Msg::EFmt("MOVSOp: Can't handle address size override (OP: 0x{:04X}, Flags: 0x{:08X})", Op->OP, Op->Flags);
     DecodeFailure = true;
@@ -3370,6 +3465,9 @@ IR::OpSize OpDispatchBuilder::GetStringOpSize(X86Tables::DecodedOp Op) const {
 }
 
 void OpDispatchBuilder::CMPSOp(OpcodeArgs) {
+  if (fexc_slice1) {
+    return FexcStringOp(Op, FexcString::CMPS);
+  }
   if (!Is64BitMode && (Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_ADDRESS_SIZE)) {
     LogMan::Msg::EFmt("CMPSOp: Address size override (0x67) not supported in 32-bit mode (OP: 0x{:04X}).", Op->OP);
     DecodeFailure = true;
@@ -3507,6 +3605,9 @@ void OpDispatchBuilder::CMPSOp(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::LODSOp(OpcodeArgs) {
+  if (fexc_slice1) {
+    return FexcStringOp(Op, FexcString::LODS);
+  }
   if (!Is64BitMode && (Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_ADDRESS_SIZE)) {
     LogMan::Msg::EFmt("LODSOp: Address size override (0x67) not supported in 32-bit mode (OP: 0x{:04X}).", Op->OP);
     DecodeFailure = true;
@@ -3604,6 +3705,9 @@ void OpDispatchBuilder::LODSOp(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::SCASOp(OpcodeArgs) {
+  if (fexc_slice1) {
+    return FexcStringOp(Op, FexcString::SCAS);
+  }
   if (!Is64BitMode && (Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_ADDRESS_SIZE)) {
     LogMan::Msg::EFmt("SCASOp: Address size override (0x67) not supported in 32-bit mode (OP: 0x{:04X}).", Op->OP);
     DecodeFailure = true;

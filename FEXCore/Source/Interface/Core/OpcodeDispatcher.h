@@ -448,6 +448,8 @@ public:
   void CMPSOp(OpcodeArgs);
   void LODSOp(OpcodeArgs);
   void SCASOp(OpcodeArgs);
+  enum class FexcString { MOVS, STOS, LODS, SCAS, CMPS };
+  void FexcStringOp(OpcodeArgs, FexcString Kind);
   void BSWAPOp(OpcodeArgs);
   void PUSHFOp(OpcodeArgs);
   void POPFOp(OpcodeArgs);
