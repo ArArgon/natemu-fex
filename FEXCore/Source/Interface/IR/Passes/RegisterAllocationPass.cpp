@@ -584,6 +584,7 @@ void ConstrainedRAPass::Run(IREmitter* IREmit_) {
   }
 
   PreferredReg.resize(IR->GetSSACount(), PhysicalRegister::Invalid());
+  fextl::vector<bool> FexcStoredTwice(fexc_slice1 ? IR->GetSSACount() : 0, false);
   SSAToReg.resize(IR->GetSSACount(), PhysicalRegister::Invalid());
   Seen.resize(IR->GetSSACount(), false);
 
@@ -615,6 +616,12 @@ void ConstrainedRAPass::Run(IREmitter* IREmit_) {
         if (auto Node = DecodeSRANode(IROp, CodeNode); Node != nullptr) {
           auto Reg = DecodeSRAReg(IROp, CodeNode);
 
+          // natemu slice1: a value stored to the same static register twice (a constant pooled across guest
+          // instructions, e.g. AF = 0) is not coalesced into it: the later store would become a self-move and its
+          // instruction has no native write of that register (verify_precision P6).
+          if (fexc_slice1 && Node != CodeNode && PreferredReg[IR->GetID(Node).Value] == Reg) {
+            FexcStoredTwice[IR->GetID(Node).Value] = true;
+          }
           PreferredReg[IR->GetID(Node).Value] = Reg;
           GetClass(Reg)->RegToSSA[Reg.Reg] = CodeNode;
         }
@@ -632,7 +639,7 @@ void ConstrainedRAPass::Run(IREmitter* IREmit_) {
           auto Node = GetClass(Reg)->RegToSSA[Reg.Reg];
           IROp_Header* Header = IR->GetOp<IROp_Header>(Node);
 
-          if (CodeNode != DecodeSRANode(Header, Node)) {
+          if (CodeNode != DecodeSRANode(Header, Node) || (fexc_slice1 && FexcStoredTwice[IR->GetID(CodeNode).Value])) {
             PreferredReg[IR->GetID(CodeNode).Value] = PhysicalRegister::Invalid();
           }
         }
