@@ -30,6 +30,7 @@ public:
     PARTIAL_DECODE_INST,
     BAD_RELOCATION,
     UNIMPLEMENTED_INST,
+    TOO_LONG_INST, // natemu: needs a 16th byte (#GP(0))
   };
 
   enum class DataMaskType : uint8_t { NONE, MOV, BRANCH, DISP, NOP };
@@ -152,6 +153,8 @@ private:
   uint64_t ExecutableRangeEnd {};
   bool ExecutableRangeWritable {};
   bool HitNonExecutableRange {};
+  bool ReadPastInput {}; // natemu: see DecodeInstruction
+  bool TooLong {};       // natemu: see DecodeInstruction
   bool HitBadRelocation {};
 
   struct DecodeStream {

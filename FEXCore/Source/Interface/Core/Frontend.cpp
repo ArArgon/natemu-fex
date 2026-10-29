@@ -117,8 +117,15 @@ bool Decoder::CheckRangeExecutable(uint64_t Address, uint64_t Size) {
 
 uint8_t Decoder::ReadByte() {
   std::optional<uint8_t> Byte = PeekByte(0);
-  if (!Byte || InstructionSize == MAX_INST_SIZE) {
+  if (!Byte || InstructionSize >= MAX_INST_SIZE) {
     HitNonExecutableRange = true;
+    // natemu: a 16th byte makes the instruction too long, readable or not (never written: Instruction holds 15); an
+    // unreadable byte within the limit after a readable one means the instruction ran past the input.
+    if (InstructionSize >= MAX_INST_SIZE) {
+      TooLong = true;
+    } else {
+      ReadPastInput |= InstructionSize != 0;
+    }
     // Pretend we read 0, the main decode loop will see HitNonExecutableRange and rollback the instruction.
     return 0;
   }
@@ -146,12 +153,21 @@ std::pair<uint64_t, bool> Decoder::ReadData(uint8_t Size) {
   uint64_t Address = reinterpret_cast<uint64_t>(InstStream.InstStream) + InstructionSize;
   LastFieldReadOffset = (uint8_t)InstructionSize;
   LastFieldReadSize = Size;
+  // natemu: the instruction ran past the input when the field's first unreadable byte is within the 15-byte limit.
+  const auto Unreadable = [&] {
+    uint8_t Readable = 0;
+    while (Readable < Size && PeekByte(Readable)) {
+      ++Readable;
+    }
+    HitNonExecutableRange = true;
+    ReadPastInput |= InstructionSize + Readable < MAX_INST_SIZE;
+  };
   if (CheckRangeExecutable(Address, Size)) {
     const auto* Source = CTX->SyscallHandler->ResolveGuestCodePointer(Address, Size, reinterpret_cast<const uint8_t*>(reinterpret_cast<uint64_t>(InstStream.AdjustedInstStream) + InstructionSize));
-    if (!Source) { HitNonExecutableRange = true; return {0, false}; }
+    if (!Source) { Unreadable(); return {0, false}; }
     std::memcpy(&Res, Source, Size);
   } else {
-    HitNonExecutableRange = true;
+    Unreadable();
     // See PeekByte, this specific case may cause some executable memory to read as 0 but it doesn't matter as the entire instruction will be rolled back anyway.
     Res = 0;
   }
@@ -164,6 +180,8 @@ std::pair<uint64_t, bool> Decoder::ReadData(uint8_t Size) {
 #else
   SkipBytes(Size);
 #endif
+  // natemu: a field ending past byte 15 makes the instruction too long (SkipBytes does not check the limit).
+  TooLong |= InstructionSize > MAX_INST_SIZE;
 
   if (Relocations) {
     uint32_t SectionOffset = static_cast<uint32_t>(Address - SectionMinAddress);
@@ -859,6 +877,7 @@ Decoder::DecodedBlockStatus Decoder::DecodeInstructionImpl(uint64_t PC) {
 
   for (;;) {
     if (InstructionSize >= MAX_INST_SIZE) {
+      TooLong = true; // natemu: 15 prefixes
       return DecodedBlockStatus::INVALID_INST;
     }
     uint8_t Op = ReadByte();
@@ -1086,20 +1105,32 @@ void Decoder::DecodeREXIfValid(int8_t ExpectedOffset) {
 Decoder::DecodedBlockStatus Decoder::DecodeInstruction(uint64_t PC) {
   // Will be set if DecodeInstructionImpl tries to read non-executable memory
   HitNonExecutableRange = false;
+  ReadPastInput = false;
+  TooLong = false;
   HitBadRelocation = false;
   auto ErrorDuringDecoding = DecodeInstructionImpl(PC);
 
-  if (ErrorDuringDecoding != DecodedBlockStatus::SUCCESS || HitNonExecutableRange || HitBadRelocation) [[unlikely]] {
+  if (ErrorDuringDecoding != DecodedBlockStatus::SUCCESS || HitNonExecutableRange || HitBadRelocation || TooLong) [[unlikely]] {
     // Put an invalid instruction in the stream so the core can raise SIGILL if hit
     // Error while decoding instruction. We don't know the table or instruction size
-    const auto InstSize = DecodeInst->InstSize;
     DecodeInst->TableInfo = nullptr;
     DecodeInst->InstSize = 0;
 
     // A decode error can be caused by substituting zero for an inaccessible
     // instruction byte, so the instruction fetch fault takes priority.
+    // natemu: partial decode when the instruction began in readable bytes and ran past them within 15 bytes, whatever
+    // the substituted zero bytes decode to (InstSize is set only when the decode completes): the fetch fault comes
+    // first. Else too long when it needs a 16th byte (#GP(0): SDM Vol.3 Interrupt 13, "Exceeding the instruction
+    // length limit of 15 bytes"), readable or not (natemu policy: the 16th byte is never fetched; the SDM is silent);
+    // else NOEXEC (its first byte is unreadable).
+    if (ReadPastInput) {
+      return DecodedBlockStatus::PARTIAL_DECODE_INST;
+    }
+    if (TooLong) {
+      return DecodedBlockStatus::TOO_LONG_INST;
+    }
     if (HitNonExecutableRange) {
-      return InstSize ? DecodedBlockStatus::PARTIAL_DECODE_INST : DecodedBlockStatus::NOEXEC_INST;
+      return DecodedBlockStatus::NOEXEC_INST;
     }
 
     if (HitBadRelocation) {
@@ -1663,6 +1694,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
                             BlockIt->BlockStatus == DecodedBlockStatus::NOEXEC_INST        ? "NoExec" :
                             BlockIt->BlockStatus == DecodedBlockStatus::BAD_RELOCATION     ? "BadRelocation" :
                             BlockIt->BlockStatus == DecodedBlockStatus::UNIMPLEMENTED_INST ? "Unimplemented" :
+                            BlockIt->BlockStatus == DecodedBlockStatus::TOO_LONG_INST      ? "TooLong" :
                                                                                              "PartialDecode",
                             OpAddress);
         }
