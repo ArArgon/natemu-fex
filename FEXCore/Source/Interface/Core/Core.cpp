@@ -706,7 +706,16 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
           }
 
           Thread->OpDispatcher->SetForceTSO(ForceTSO);
+          // natemu slice1: a LOCK instruction neither reuses nor leaves a pooled constant. Its atomic takes the value in a
+          // register, and a constant pooled block-wide holds its register from first to last use, so LOCK forms in a long
+          // block would exhaust the allocator, and slice1 admits no spill.
+          if (fexc_slice1 && IsLocked) {
+            Thread->OpDispatcher->NrConstants = 0;
+          }
           std::invoke(Fn, Thread->OpDispatcher, DecodedInfo);
+          if (fexc_slice1 && IsLocked) {
+            Thread->OpDispatcher->NrConstants = 0;
+          }
           if (Thread->OpDispatcher->HadDecodeFailure()) {
             HadDispatchError = true;
           } else {

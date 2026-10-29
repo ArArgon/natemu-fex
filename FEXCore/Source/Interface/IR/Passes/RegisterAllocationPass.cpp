@@ -645,7 +645,7 @@ void ConstrainedRAPass::Run(IREmitter* IREmit_) {
         }
 
         if (fexc_slice1 && (FexcPrecision::GuestMemOp(IROp->Op) || IROp->Op == OP_GUESTOPCODE)) {
-          if (IROp->Op == OP_LOADMEM || IROp->Op == OP_LOADMEMTSO) {
+          if (FexcPrecision::LoadsInto(IROp->Op)) {
             PreferredReg[IR->GetID(CodeNode).Value] = PhysicalRegister::Invalid();
           }
           PhysicalRegister Keep = PhysicalRegister::Invalid();
@@ -792,7 +792,7 @@ void ConstrainedRAPass::Run(IREmitter* IREmit_) {
       // Assign destinations.
       if (GetHasDest(IROp->Op) && PhysicalRegister(CodeNode).IsInvalid()) {
         AssignReg(IROp, BlockIROp, CodeNode, IROp);
-        if (fexc_slice1 && (IROp->Op == OP_LOADMEM || IROp->Op == OP_LOADMEMTSO) && CodeNode->GetUses() == 0) {
+        if (fexc_slice1 && FexcPrecision::LoadsInto(IROp->Op) && CodeNode->GetUses() == 0) {
           FreeReg(PhysicalRegister(CodeNode));
         }
       }

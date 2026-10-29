@@ -3851,6 +3851,12 @@ void OpDispatchBuilder::NEGOp(OpcodeArgs) {
   auto ZeroConst = Constant(0);
 
   if (DestIsLockedMem(Op)) {
+    if (fexc_slice1) {
+      // natemu: the slice1 lowering of AtomicFetchNeg may leave through a literal exit to this instruction's RIP (a lost
+      // compare-and-swap), so the guest flags are complete and CF is in the exit ABI's form before it.
+      CalculateDeferredFlags();
+      RectifyCarryInvert(CFInvertedABI);
+    }
     Ref DestMem = MakeSegmentAddress(Op, Op->Dest);
     Ref Dest = _AtomicFetchNeg(Size, DestMem);
     CalculateFlags_SUB(Size, ZeroConst, Dest);
@@ -4080,6 +4086,9 @@ void OpDispatchBuilder::CMPXCHGOp(OpcodeArgs) {
   } else {
     Ref Src2 = LoadSourceGPR(Op, Op->Src[0], Op->Flags);
     HandledLock = Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_LOCK;
+    if (fexc_slice1 && HandledLock) {
+      fexc_lock_cas.insert(Op->PC);   // natemu: a `dmb ish` before its casal (a failing CAS is no barrier on Arm)
+    }
 
     auto Src3 = LoadGPRRegister(X86State::REG_RAX);
     auto Src3Lower = _Bfe(OpSize::i64Bit, OpSizeAsBits(Size), 0, Src3);
@@ -4139,6 +4148,9 @@ void OpDispatchBuilder::CMPXCHGPairOp(OpcodeArgs) {
 
   Ref Result_Lower = _AllocateGPR(true);
   Ref Result_Upper = _AllocateGPRAfter(Result_Lower);
+  if (fexc_slice1 && HandledLock) {
+    fexc_lock_cas.insert(Op->PC);     // natemu: a `dmb ish` before its caspal (LOCK only)
+  }
   _CASPair(Size, Expected_Lower, Expected_Upper, Desired_Lower, Desired_Upper, Src1, Result_Lower, Result_Upper);
 
   HandleNZCV_RMW();

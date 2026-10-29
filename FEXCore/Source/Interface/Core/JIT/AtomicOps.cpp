@@ -5,6 +5,7 @@ tags: backend|arm64
 $end_info$
 */
 
+#include <fexc_hook.h>
 #include "Interface/Context/Context.h"
 #include "Interface/Core/Dispatcher/Dispatcher.h"
 #include "Interface/Core/JIT/JITClass.h"
@@ -45,6 +46,11 @@ DEF_OP(CASPair) {
     // ISA limitations. But by making them 64-bit, Firestorm can rename.
     mov(ARMEmitter::Size::i64Bit, CaspalDst0, Expected0);
     mov(ARMEmitter::Size::i64Bit, CaspalDst1, Expected1);
+    if (fexc_slice1 && fexc_lock_cas.count(Entry + FexcGuest)) {
+      // natemu: LOCK CMPXCHG8B/16B is a full barrier also when its comparison fails; a failing CASPAL writes nothing and
+      // has only acquire semantics, so earlier accesses are ordered before its read by a barrier right before it.
+      dmb(ARMEmitter::BarrierScope::ISH);
+    }
     caspal(EmitSize, CaspalDst0, CaspalDst1, Desired0, Desired1, MemSrc);
 
     if (CaspalDst0 != Dst0) {
@@ -103,10 +109,14 @@ DEF_OP(CAS) {
   auto Dst = GetReg(Node);
 
   if (CTX->HostFeatures.SupportsAtomics) {
+    // natemu: LOCK CMPXCHG likewise (a `dmb ish` right before the casal).
+    const bool FexcBarrier = fexc_slice1 && fexc_lock_cas.count(Entry + FexcGuest);
     if (Expected == Dst && Dst != MemSrc && Dst != Desired) {
+      if (FexcBarrier) dmb(ARMEmitter::BarrierScope::ISH);
       casal(SubEmitSize, Dst, Desired, MemSrc);
     } else {
       mov(EmitSize, TMP2, Expected);
+      if (FexcBarrier) dmb(ARMEmitter::BarrierScope::ISH);
       casal(SubEmitSize, TMP2, Desired, MemSrc);
       mov(EmitSize, Dst, TMP2.R());
     }
@@ -296,6 +306,10 @@ DEF_OP(AtomicFetchXor) {
 }
 
 DEF_OP(AtomicFetchNeg) {
+  if (fexc_slice1) {
+    // natemu slice1: one compare-and-swap attempt, a lost race exits to the instruction's own RIP (no backward branch).
+    return FexcLockNeg(IROp, Node);
+  }
   auto Op = IROp->C<IR::IROp_AtomicFetchNeg>();
   const auto EmitSize = ConvertSize(IROp);
   const auto SubEmitSize = ConvertSubRegSize8(IROp->Size);

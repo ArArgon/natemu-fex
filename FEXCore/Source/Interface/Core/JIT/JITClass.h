@@ -550,6 +550,9 @@ private:
   void FexcDivAfterCall();
   // natemu (fexc), profile slice1: a computed exit's branch to the resident's dispatcher (same file).
   void FexcDispatchExit();
+  // natemu (fexc), profile slice1: LOCK NEG m as one compare-and-swap attempt with an exit to its own RIP (same file).
+  void FexcLockNeg(const IR::IROp_Header* IROp, IR::Ref Node);
+  uint32_t FexcNegLoad {};
   // (targets and RIP-relative accesses come from FexcPrecision::Prescan, run before register allocation)
   fextl::map<size_t, ARMEmitter::ForwardLabel> FexcStubs;   // guard/split site index -> its stub
   fextl::vector<size_t> FexcPendingLink;                    // guard/split sites waiting for their access's native offset
