@@ -29,6 +29,21 @@ void OpDispatchBuilder::MOVVectorAlignedOp(OpcodeArgs) {
     // Nop
     return;
   }
+  if (fexc_slice1 && !(Op->Dest.IsGPR() && Op->Src[0].IsGPR())) {
+    // natemu slice1 (I5a): MOVAPS/MOVAPD/MOVDQA m128 are single-copy atomic on processors that enumerate AVX (SDM Vol.3
+    // 9.1.1); an Arm LDR/STR Q is two 64-bit single-copy atomic accesses, while an LDP/STP of two X registers that is
+    // 16-byte aligned is one (FEAT_LSE2, DDI0487 B2.2.1). The operand's alignment is checked first (#GP(0)).
+    if (!Op->Dest.IsGPR()) {
+      Ref Src = LoadSourceFPR(Op, Op->Src[0], Op->Flags);
+      Ref Addr = MakeSegmentAddress(Op, Op->Dest);
+      _StoreMemPair(RegClass::GPR, OpSize::i64Bit, _VExtractToGPR(OpSize::i128Bit, OpSize::i64Bit, Src, 0),
+                    _VExtractToGPR(OpSize::i128Bit, OpSize::i64Bit, Src, 1), Addr, 0);
+    } else {
+      RefPair V = LoadMemPair(RegClass::GPR, OpSize::i64Bit, MakeSegmentAddress(Op, Op->Src[0]), 0);
+      StoreResult_WithAVXInsert(VectorOpType::SSE, RegClass::FPR, Op, _VLoadTwoGPRs(V.Low, V.High));
+    }
+    return;
+  }
   Ref Src = LoadSourceFPR(Op, Op->Src[0], Op->Flags);
   StoreResult_WithAVXInsert(VectorOpType::SSE, RegClass::FPR, Op, Src);
 }
@@ -4581,22 +4596,34 @@ Ref OpDispatchBuilder::DPPOpImpl(IR::OpSize DstSize, Ref Src1, Ref Src2, uint8_t
   }();
 
   Ref ZeroVec = LoadZeroVector(DstSize);
-  if (SrcMask == 0 || DstMask == 0) {
+  // natemu slice1 (I5a): with a zero destination mask x86 still multiplies the selected elements and adds (MXCSR flags);
+  // the products are computed and the result is the zero vector (below).
+  if (SrcMask == 0 || (DstMask == 0 && !fexc_slice1)) {
     // What are you even doing here? Go away.
     return ZeroVec;
   }
 
   // First step is to do an FMUL
+  // natemu slice1 (I5a): x86 multiplies only the selected elements (the others are +0.0), so their operands raise no
+  // MXCSR flag (DE, IE, OE, UE, PE): mask both sources before the multiply instead of the products after it.
+  if (fexc_slice1 && SrcMask != SizeMask) {
+    auto InputMask = LoadAndCacheIndexedNamedVectorConstant(DstSize, NamedIndexMask, SrcMask * 16);
+    Src1 = _VAnd(DstSize, Src1, InputMask);
+    Src2 = _VAnd(DstSize, Src2, InputMask);
+  }
   Ref Temp = _VFMul(DstSize, ElementSize, Src1, Src2);
 
   // Now mask results based on IndexMask.
-  if (SrcMask != SizeMask) {
+  if (SrcMask != SizeMask && !fexc_slice1) {
     auto InputMask = LoadAndCacheIndexedNamedVectorConstant(DstSize, NamedIndexMask, SrcMask * 16);
     Temp = _VAnd(DstSize, Temp, InputMask);
   }
 
   // Now due a float reduction
   Temp = _VFAddV(DstSize, ElementSize, Temp);
+  if (DstMask == 0) {
+    return _VAnd(DstSize, Temp, ZeroVec);   // natemu slice1: kept for its flags (an unused result would be eliminated)
+  }
 
   // Now using the destination mask we choose where the result ends up
   // It can duplicate and zero results

@@ -589,7 +589,8 @@ bool DeadFlagCalculationEliminination::ProcessBlock(IREmitter* IREmit, IRListVie
         bool Eliminated = false;
 
         if ((FlagsRead & Info.Write()) == 0) {
-          if ((Info.CanEliminate() || Info.Replacement()) && CodeNode->GetUses() == 0) {
+          // natemu slice1 (I5a): an FCmp (COMISS/UCOMISS) whose flags are dead still raises its MXCSR flags (IE, DE).
+          if ((Info.CanEliminate() || Info.Replacement()) && CodeNode->GetUses() == 0 && !(fexc_slice1 && IROp->Op == OP_FCMP)) {
             IREmit->Remove(CodeNode);
             Eliminated = true;
           } else if (Info.Replacement()) {
