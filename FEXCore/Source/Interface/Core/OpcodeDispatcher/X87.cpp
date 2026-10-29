@@ -17,6 +17,8 @@ $end_info$
 #include <FEXCore/Utils/LogManager.h>
 #include <FEXCore/Utils/FPState.h>
 
+#include <fexc_hook.h>
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -762,6 +764,18 @@ Ref OpDispatchBuilder::ReconstructFSW_Helper(Ref T) {
   auto IE = GetRFLAG(FEXCore::X86State::X87FLAG_IE_LOC);
   FSW = _Or(OpSize::i64Bit, FSW, IE);
 
+  if (fexc_slice1) {
+    // natemu slice1 (I6): the exception flags from the x87 exception word (FPSR order: IOC IE, DZC ZE, OFC OE, UFC UE, IXC PE,
+    // IDC DE; bit 6 SF): FSW bits 0 IE, 1 DE, 2..5 ZE OE UE PE, 6 SF. ES and B stay 0: every exception is masked (an FCW that
+    // unmasks one is refused by the resident).
+    Ref Ex = _LoadContextGPR(OpSize::i32Bit, FEXC_X87_EXCEPTIONS);
+    FSW = _Orlshl(OpSize::i64Bit, FSW, GetRFLAG(FEXCore::X86State::X87FLAG_PE_LOC), 5);   // FIST m16/m32's PE byte
+    FSW = _Orlshl(OpSize::i64Bit, FSW, GetRFLAG(FEXCore::X86State::X87FLAG_SF_LOC), 6);   // the x87 pass's stack fault
+    FSW = _Or(OpSize::i64Bit, FSW, _And(OpSize::i32Bit, Ex, Constant(0x41)));
+    FSW = _Or(OpSize::i64Bit, FSW, _And(OpSize::i32Bit, _Lshr(OpSize::i32Bit, Ex, Constant(6)), Constant(2)));
+    FSW = _Or(OpSize::i64Bit, FSW, _And(OpSize::i32Bit, _Lshl(OpSize::i32Bit, Ex, Constant(1)), Constant(0x3c)));
+  }
+
   return FSW;
 }
 
@@ -859,6 +873,25 @@ void OpDispatchBuilder::X87FCMOV(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::X87FXAM(OpcodeArgs) {
+  if (fexc_slice1 && ReducedPrecisionMode) {
+    // natemu slice1 (I6): x86's classes for a double (SDM Vol.2 FXAM; C3 C2 C0): empty 101, NaN 001, infinity 011, zero 100,
+    // normal 010; a denormal double is a normal 80-bit value (010). C1 the sign. Flag-free; no exception.
+    // ST(0) read from the page directly: FXAM of an empty register is no stack fault (the x87 pass checks every other read).
+    _SyncStackToSlow();
+    Ref St0 = _LoadContextFPRIndexed(_And(OpSize::i32Bit, GetX87Top(), Constant(7)), OpSize::i64Bit, MMBaseOffset(), 16);
+    Ref Bits = _VExtractToGPR(OpSize::i64Bit, OpSize::i64Bit, St0, 0);
+    Ref One = Constant(1);
+    Ref Abs = _And(OpSize::i64Bit, Bits, Constant(0x7fff'ffff'ffff'ffffULL));
+    Ref IsZero = _Xor(OpSize::i64Bit, _Lshr(OpSize::i64Bit, _Or(OpSize::i64Bit, Abs, _Neg(OpSize::i64Bit, Abs)), Constant(63)), One);
+    Ref IsSpecial = _Lshr(OpSize::i64Bit, Add(OpSize::i64Bit, _Lshr(OpSize::i64Bit, Abs, Constant(52)), 1), Constant(11));   // NaN or infinity
+    Ref IsNaN = _Lshr(OpSize::i64Bit, Add(OpSize::i64Bit, Abs, 0x000f'ffff'ffff'ffffULL), Constant(63));
+    Ref Empty = _Xor(OpSize::i64Bit, _StackValidTag(0), One);
+    SetRFLAG<FEXCore::X86State::X87FLAG_C1_LOC>(_Lshr(OpSize::i64Bit, Bits, Constant(63)));
+    SetRFLAG<FEXCore::X86State::X87FLAG_C0_LOC>(_Or(OpSize::i64Bit, IsSpecial, Empty));
+    SetRFLAG<FEXCore::X86State::X87FLAG_C2_LOC>(_Andn(OpSize::i64Bit, _Xor(OpSize::i64Bit, _Or(OpSize::i64Bit, IsZero, IsNaN), One), Empty));
+    SetRFLAG<FEXCore::X86State::X87FLAG_C3_LOC>(_Or(OpSize::i64Bit, IsZero, Empty));
+    return;
+  }
   auto a = _ReadStackValue(0);
   Ref Result =
     ReducedPrecisionMode ? _VExtractToGPR(OpSize::i64Bit, OpSize::i64Bit, a, 0) : _VExtractToGPR(OpSize::i128Bit, OpSize::i64Bit, a, 1);

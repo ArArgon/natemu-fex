@@ -556,6 +556,10 @@ private:
   void FexcVectorConstant(ARMEmitter::VRegister Dst, IR::OpSize OpSize, const uint8_t* Bytes);
   // natemu (fexc), profile slice1 (I5a): the MXCSR flags x86 raises (shim/fexc_sites.inc).
   bool FexcQuietOp(const IR::IROp_Header* IROp);
+  // natemu (fexc), profile slice1 (I6): x87 floating-point ops: FPSR into the x87 exception word, the x87 FPCR (shim/fexc_sites.inc).
+  bool FexcX87Op(const IR::IROp_Header* IROp);
+  void FexcX87Begin();
+  void FexcX87End();
   bool FexcRoundBegin(IR::RoundMode Mode);
   void FexcRoundEnd(IR::RoundMode Mode);
   uint32_t FexcNegLoad {};

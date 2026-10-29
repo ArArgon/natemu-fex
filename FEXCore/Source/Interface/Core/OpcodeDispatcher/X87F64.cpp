@@ -15,6 +15,8 @@ $end_info$
 #include <FEXCore/Utils/EnumUtils.h>
 #include <FEXCore/Utils/LogManager.h>
 
+#include <fexc_hook.h>
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -66,8 +68,12 @@ void OpDispatchBuilder::FLDF64(OpcodeArgs, IR::OpSize Width) {
     ConvertedData = _Float_FToF(OpSize::i64Bit, OpSize::i32Bit, Data);
   } else if (Width == OpSize::f80Bit) {
     ConvertedData = _F80CVT(OpSize::i64Bit, Data);
+  } else if (fexc_slice1 && Width == OpSize::i64Bit) {
+    // natemu slice1 (I6): FLD m64 quiets an SNaN with IE and raises DE for a denormal (SDM FLD #IA, #D): a multiply by 1.0,
+    // exact for every other value under the x87 FPCR (FZ = 0), inside the x87 FPSR wrapper.
+    ConvertedData = _VFMul(OpSize::i64Bit, OpSize::i64Bit, Data, _VCastFromGPR(OpSize::i64Bit, OpSize::i64Bit, Constant(0x3ff0'0000'0000'0000ULL)));
   }
-  _PushStack(ConvertedData, Data, Width);
+  _PushStack(ConvertedData, fexc_slice1 ? ConvertedData : Data, Width);
 }
 
 void OpDispatchBuilder::FBLDF64(OpcodeArgs) {
@@ -104,6 +110,49 @@ void OpDispatchBuilder::FILDF64(OpcodeArgs) {
 
 void OpDispatchBuilder::FISTF64(OpcodeArgs, bool Truncate) {
   const auto Size = OpSizeFromSrc(Op);
+
+  if (fexc_slice1) {
+    // natemu slice1 (I6): x86's FIST/FISTP/FISTTP (SDM Vol.2): round by FCW.RC (`frintx`: PE when inexact; the x87 FPCR) or
+    // truncate (`fcvtzs`: PE when inexact), then store the integer, or the integer indefinite (the operand size's smallest
+    // value) with IE for a NaN or a value outside the operand size's range. Arm saturates instead, and FEX converts the 16-bit
+    // form at 64 bits and stores its low half. IE comes from FPSR.IOC (NaN, 64-bit overflow) or, for 16/32 bits, the range check.
+    // Flag-free (no NZCV to save, few live registers: slice1 admits no spill area): NaN from the double's bits, the range
+    // check by comparing the 64-bit result with its sign-extended low part (64 bits: the saturated INT64_MAX), a mask select.
+    Ref Data = _ReadStackValue(0);
+    // m64: frintx (FIST) or fcvtzs (FISTTP) raise PE; m16/m32 round without a flag (frinti/frintz) and compute PE below.
+    Ref Integral = Truncate && Size == OpSize::i64Bit ? Data :
+                   _Vector_FToI(OpSize::i64Bit, OpSize::i64Bit, Data, Truncate ? RoundMode::TowardsZero : RoundMode::Host);
+    Ref Value = _Float_ToGPR_ZS(OpSize::i64Bit, OpSize::i64Bit, Integral);
+    Ref Bits = _VExtractToGPR(OpSize::i64Bit, OpSize::i64Bit, Data, 0);
+    Ref IsNaN = _Lshr(OpSize::i64Bit, Add(OpSize::i64Bit, _And(OpSize::i64Bit, Bits, Constant(0x7fff'ffff'ffff'ffffULL)), 0x000f'ffff'ffff'ffffULL),
+                      Constant(63));
+    Ref Diff = Size == OpSize::i64Bit ? _Xor(OpSize::i64Bit, Value, Constant(0x7fff'ffff'ffff'ffffULL))
+                                      : _Xor(OpSize::i64Bit, Value, _Sbfe(OpSize::i64Bit, IR::OpSizeAsBits(Size), 0, Value));
+    Ref NonZero = _Lshr(OpSize::i64Bit, _Or(OpSize::i64Bit, Diff, _Neg(OpSize::i64Bit, Diff)), Constant(63));
+    Ref OutOfRange = Size == OpSize::i64Bit ? _Xor(OpSize::i64Bit, NonZero, Constant(1)) : NonZero;
+    Ref Mask = _Neg(OpSize::i64Bit, _Or(OpSize::i64Bit, IsNaN, OutOfRange));
+    const uint64_t Indefinite = Size == OpSize::i16Bit ? 0x8000 : Size == OpSize::i32Bit ? 0x8000'0000ULL : 0x8000'0000'0000'0000ULL;
+    // m16/m32: PE when the rounding was inexact and the integer is stored (an out-of-range value raises IE alone). m64:
+    // out of range is integral, and Arm raises no IXC beside IOC.
+    Ref Inexact {};
+    if (Size != OpSize::i64Bit) {
+      Ref Diff2 = _Xor(OpSize::i64Bit, Bits, _VExtractToGPR(OpSize::i64Bit, OpSize::i64Bit, Integral, 0));
+      Inexact = _Andn(OpSize::i64Bit, _Lshr(OpSize::i64Bit, _Or(OpSize::i64Bit, Diff2, _Neg(OpSize::i64Bit, Diff2)), Constant(63)), _Neg(OpSize::i64Bit, Mask));
+    }
+    Value = _Or(OpSize::i64Bit, _Andn(OpSize::i64Bit, Value, Mask), _And(OpSize::i64Bit, Mask, Constant(Indefinite)));
+    StoreResultGPR_WithOpSize(Op, Op->Dest, Value, Size, OpSize::i8Bit, MemoryAccessType::NONTSO);
+    if (Size != OpSize::i64Bit) {
+      // After the store (a #PF there leaves FSW as it was, except the FPSR flags already accumulated; plan I6 deviations).
+      SetRFLAG<FEXCore::X86State::X87FLAG_IE_LOC>(_Or(OpSize::i32Bit, GetRFLAG(FEXCore::X86State::X87FLAG_IE_LOC), OutOfRange));
+    }
+    if (Inexact) {
+      SetRFLAG<FEXCore::X86State::X87FLAG_PE_LOC>(_Or(OpSize::i32Bit, GetRFLAG(FEXCore::X86State::X87FLAG_PE_LOC), Inexact));
+    }
+    if ((Op->TableInfo->Flags & X86Tables::InstFlags::FLAGS_POP) != 0) {
+      _PopStackDestroy();
+    }
+    return;
+  }
 
   Ref data = _ReadStackValue(0);
   bool CanUseFloatReg = Size == OpSize::i64Bit;
@@ -368,6 +417,9 @@ void OpDispatchBuilder::FCOMIF64(OpcodeArgs, IR::OpSize Width, bool Integer, OpD
     HandleNZCVWrite();
     _F80CmpValue(b);
     ComissFlags();
+    if (fexc_slice1) {
+      SetRFLAG<FEXCore::X86State::X87FLAG_C1_LOC>(Constant(0));   // natemu slice1 (I6): FCOMI/FUCOMI(P): C1 = 0 (SDM)
+    }
   }
 
   if (PopTwice) {
