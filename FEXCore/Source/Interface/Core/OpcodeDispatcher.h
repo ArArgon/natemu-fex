@@ -2504,6 +2504,17 @@ private:
       return _LoadMem(Class, Size, ssa0, Invalid(), Align, MemOffsetType::SXTX, 1);
     }
   }
+  // natemu slice1 (I5a): one vector element from or to memory as a plain load or store of the element (a recorded access site)
+  // instead of FEX's ld1/st1 lane ops, which the site record does not describe; FEX's own ops otherwise.
+  Ref FexcLoadElement(OpSize Size, OpSize ElementSize, Ref Dst, uint8_t Index, Ref Addr) {
+    if (!fexc_slice1) return _VLoadVectorElement(Size, ElementSize, Dst, Index, Addr);
+    Ref Value = _LoadMemAutoTSO(RegClass::FPR, ElementSize, Addr, OpSize::i8Bit);
+    return _VInsElement(Size, ElementSize, Index, 0, Dst, Value);
+  }
+  void FexcStoreElement(OpSize Size, OpSize ElementSize, Ref Src, uint8_t Index, Ref Addr) {
+    if (!fexc_slice1) { _VStoreVectorElement(Size, ElementSize, Src, Index, Addr); return; }
+    _StoreMemAutoTSO(RegClass::FPR, ElementSize, Addr, Index == 0 ? Src : _VDupElement(Size, ElementSize, Src, Index), OpSize::i8Bit);
+  }
   Ref _LoadMemGPRAutoTSO(OpSize Size, Ref ssa0, OpSize Align = OpSize::i8Bit) {
     return _LoadMemAutoTSO(RegClass::GPR, Size, ssa0, Align);
   }

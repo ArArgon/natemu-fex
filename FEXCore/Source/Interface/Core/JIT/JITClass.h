@@ -552,6 +552,12 @@ private:
   void FexcDispatchExit();
   // natemu (fexc), profile slice1: LOCK NEG m as one compare-and-swap attempt with an exit to its own RIP (same file).
   void FexcLockNeg(const IR::IROp_Header* IROp, IR::Ref Node);
+  // natemu (fexc), profile slice1 (I5a): a named vector constant built in its register (VectorOps.cpp).
+  void FexcVectorConstant(ARMEmitter::VRegister Dst, IR::OpSize OpSize, const uint8_t* Bytes);
+  // natemu (fexc), profile slice1 (I5a): the MXCSR flags x86 raises (shim/fexc_sites.inc).
+  bool FexcQuietOp(const IR::IROp_Header* IROp);
+  bool FexcRoundBegin(IR::RoundMode Mode);
+  void FexcRoundEnd(IR::RoundMode Mode);
   uint32_t FexcNegLoad {};
   // (targets and RIP-relative accesses come from FexcPrecision::Prescan, run before register allocation)
   fextl::map<size_t, ARMEmitter::ForwardLabel> FexcStubs;   // guard/split site index -> its stub

@@ -1514,7 +1514,13 @@ DEF_OP(FCmp) {
   ARMEmitter::VRegister Scalar1 = GetVReg(Op->Scalar1);
   ARMEmitter::VRegister Scalar2 = GetVReg(Op->Scalar2);
 
-  fcmp(EmitSubSize, Scalar1, Scalar2);
+  // natemu slice1 (I5a): COMISS/COMISD signal invalid for a QNaN too (fcmpe); UCOMISS/UCOMISD only for an SNaN (fcmp).
+  if (fexc_slice1 && fexc_fp_signal.count(Entry + FexcGuest)) {
+    if (EmitSubSize == ARMEmitter::ScalarRegSize::i64Bit) fcmpe(Scalar1.D(), Scalar2.D());
+    else fcmpe(Scalar1.S(), Scalar2.S());
+  } else {
+    fcmp(EmitSubSize, Scalar1, Scalar2);
+  }
 }
 
 } // namespace FEXCore::CPU

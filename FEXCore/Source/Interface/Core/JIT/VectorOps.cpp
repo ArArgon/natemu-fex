@@ -7,6 +7,7 @@ $end_info$
 
 #include "Interface/Core/Dispatcher/Dispatcher.h"
 #include "Interface/Core/JIT/JITClass.h"
+#include <fexc_hook.h>
 
 #include <FEXCore/Utils/MathUtils.h>
 
@@ -743,9 +744,15 @@ DEF_OP(VFToIScalarInsert) {
   const auto SubRegSize = ConvertSubRegSizePair248(IROp);
   const auto RoundMode = Op->Round;
 
-  auto ScalarEmit = [this, SubRegSize, RoundMode](ARMEmitter::VRegister Dst, std::variant<ARMEmitter::VRegister, ARMEmitter::Register> SrcVar) {
+  // natemu slice1 (I5a): ROUNDSS/ROUNDSD with imm8 bit 3 clear raise PE when inexact: frintx (under the instruction's mode).
+  const bool FexcX = FexcRoundBegin(RoundMode);
+  auto ScalarEmit = [this, SubRegSize, RoundMode, FexcX](ARMEmitter::VRegister Dst, std::variant<ARMEmitter::VRegister, ARMEmitter::Register> SrcVar) {
     auto Src = *std::get_if<ARMEmitter::VRegister>(&SrcVar);
 
+    if (FexcX) {
+      frintx(SubRegSize.Scalar, Dst, Src);
+      return;
+    }
     switch (RoundMode) {
     case IR::RoundMode::Nearest: frintn(SubRegSize.Scalar, Dst, Src); break;
     case IR::RoundMode::NegInfinity: frintm(SubRegSize.Scalar, Dst, Src); break;
@@ -762,6 +769,7 @@ DEF_OP(VFToIScalarInsert) {
   const auto Vector2 = GetVReg(Op->Vector2);
 
   VFScalarUnaryOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, ScalarEmit, Dst, Vector1, Vector2);
+  if (FexcX) FexcRoundEnd(RoundMode);
 }
 
 DEF_OP(VFCMPScalarInsert) {
@@ -955,6 +963,21 @@ DEF_OP(VectorImm) {
   }
 }
 
+// natemu slice1: the 1..16 bytes at `Bytes` into Dst (the rest of the register zeroed, as the loads it replaces), through x0.
+void Arm64JITCore::FexcVectorConstant(ARMEmitter::VRegister Dst, IR::OpSize OpSize, const uint8_t* Bytes) {
+  const size_t Size = IR::OpSizeToSize(OpSize);
+  LOGMAN_THROW_A_FMT(Size <= 16, "natemu slice1: {}-byte vector constant", Size);
+  uint64_t Lo = 0, Hi = 0;
+  memcpy(&Lo, Bytes, std::min<size_t>(Size, 8));
+  if (Size > 8) memcpy(&Hi, Bytes + 8, Size - 8);
+  LoadConstant(ARMEmitter::Size::i64Bit, TMP1, Lo);
+  fmov(ARMEmitter::Size::i64Bit, Dst.D(), TMP1);
+  if (Hi) {
+    LoadConstant(ARMEmitter::Size::i64Bit, TMP1, Hi);
+    fmov(ARMEmitter::Size::i64Bit, Dst.D(), TMP1, true);
+  }
+}
+
 DEF_OP(LoadNamedVectorConstant) {
   const auto Op = IROp->C<IR::IROp_LoadNamedVectorConstant>();
   const auto OpSize = IROp->Size;
@@ -974,6 +997,11 @@ DEF_OP(LoadNamedVectorConstant) {
       // Intentionally doing nothing.
       break;
     }
+  }
+  if (fexc_slice1) {
+    // natemu slice1: no load from the state frame (code touches no emulator data): the constant is built in the register.
+    FexcVectorConstant(Dst, OpSize, reinterpret_cast<const uint8_t*>(ThreadState->CurrentFrame->Pointers.NamedVectorConstantPointers[Op->Constant]));
+    return;
   }
   // Load the pointer.
   auto GenerateMemOperand = [this](IR::OpSize OpSize, uint32_t NamedConstant, ARMEmitter::Register Base) {
@@ -1012,6 +1040,12 @@ DEF_OP(LoadNamedVectorIndexedConstant) {
 
   const auto Dst = GetVReg(Node);
 
+  if (fexc_slice1) {
+    // natemu slice1: the table entry is known at compile time; built in the register (no load from the state frame).
+    FexcVectorConstant(Dst, OpSize,
+                       reinterpret_cast<const uint8_t*>(ThreadState->CurrentFrame->Pointers.IndexedNamedVectorConstantPointers[Op->Constant]) + Op->Index);
+    return;
+  }
   // Load the pointer.
   ldr(TMP1, STATE_PTR_IDX(CpuStateFrame, Pointers.IndexedNamedVectorConstantPointers, Op->Constant));
 

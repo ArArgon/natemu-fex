@@ -54,7 +54,7 @@ void OpDispatchBuilder::MOVVectorNTOp(OpcodeArgs, bool IsAVX) {
   if (Op->Dest.IsGPR() && Size >= OpSize::i128Bit) {
     ///< MOVNTDQA load non-temporal comes from SSE4.1 and is extended by AVX/AVX2.
     Ref SrcAddr = LoadSourceGPR(Op, Op->Src[0], Op->Flags, {.LoadData = false});
-    auto Src = _VLoadNonTemporal(Size, SrcAddr, 0);
+    auto Src = fexc_slice1 ? _LoadMemFPRAutoTSO(Size, SrcAddr) : _VLoadNonTemporal(Size, SrcAddr, 0);   // natemu: a site
 
     if (IsAVX) {
       StoreResultFPR(Op, Src, OpSize::i8Bit, MemoryAccessType::STREAM);
@@ -81,7 +81,8 @@ void OpDispatchBuilder::MOVVectorNTOp(OpcodeArgs, bool IsAVX) {
       Ref Dest = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.LoadData = false});
 
       // Single store non-temporal for larger operations.
-      _VStoreNonTemporal(Size, Src, Dest, 0);
+      if (fexc_slice1) _StoreMemFPRAutoTSO(Size, Dest, Src);   // natemu: a site (ordered as any store: allowed for MOVNT)
+      else _VStoreNonTemporal(Size, Src, Dest, 0);
     }
   }
 }
@@ -123,7 +124,7 @@ void OpDispatchBuilder::MOVHPDOp(OpcodeArgs) {
       // xmm1[127:64] = src
       Ref Src = MakeSegmentAddress(Op, Op->Src[0]);
       Ref Dest = LoadSourceFPR_WithOpSize(Op, Op->Dest, OpSize::i128Bit, Op->Flags);
-      auto Result = _VLoadVectorElement(OpSize::i128Bit, OpSize::i64Bit, Dest, 1, Src);
+      auto Result = FexcLoadElement(OpSize::i128Bit, OpSize::i64Bit, Dest, 1, Src);
       StoreResult_WithAVXInsert(VectorOpType::SSE, RegClass::FPR, Op, Result);
     }
   } else {
@@ -131,7 +132,7 @@ void OpDispatchBuilder::MOVHPDOp(OpcodeArgs) {
     // Mem64 = xmm1[127:64]
     Ref Src = LoadSourceFPR(Op, Op->Src[0], Op->Flags);
     Ref Dest = MakeSegmentAddress(Op, Op->Dest);
-    _VStoreVectorElement(OpSize::i128Bit, OpSize::i64Bit, Src, 1, Dest);
+    FexcStoreElement(OpSize::i128Bit, OpSize::i64Bit, Src, 1, Dest);
   }
 }
 
@@ -161,7 +162,7 @@ void OpDispatchBuilder::MOVLPOp(OpcodeArgs) {
       const auto DstSize = OpSizeFromDst(Op);
       Ref Src = MakeSegmentAddress(Op, Op->Src[0]);
       Ref Dest = LoadSourceFPR_WithOpSize(Op, Op->Dest, DstSize, Op->Flags);
-      auto Result = _VLoadVectorElement(OpSize::i128Bit, OpSize::i64Bit, Dest, 0, Src);
+      auto Result = FexcLoadElement(OpSize::i128Bit, OpSize::i64Bit, Dest, 0, Src);
       StoreResult_WithAVXInsert(VectorOpType::SSE, RegClass::FPR, Op, Result);
     }
   } else {
@@ -2062,7 +2063,7 @@ Ref OpDispatchBuilder::PINSROpImpl(OpcodeArgs, IR::OpSize ElementSize, const X86
 
   // If loading from memory then we only load the element size
   Ref Src2 = MakeSegmentAddress(Op, Src2Op);
-  return _VLoadVectorElement(Size, ElementSize, Src1, Index, Src2);
+  return FexcLoadElement(Size, ElementSize, Src1, Index, Src2);
 }
 
 void OpDispatchBuilder::PINSROp(OpcodeArgs, IR::OpSize ElementSize) {
@@ -2166,7 +2167,7 @@ void OpDispatchBuilder::PExtrOp(OpcodeArgs, IR::OpSize ElementSize) {
 
   // If we are storing to memory then we store the size of the element extracted
   Ref Dest = MakeSegmentAddress(Op, Op->Dest);
-  _VStoreVectorElement(OpSize::i128Bit, OverridenElementSize, Src, Index, Dest);
+  FexcStoreElement(OpSize::i128Bit, OverridenElementSize, Src, Index, Dest);
 }
 
 void OpDispatchBuilder::VEXTRACT128Op(OpcodeArgs) {

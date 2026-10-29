@@ -416,6 +416,18 @@ DEF_OP(Vector_FToI) {
 
   const auto Dst = GetVReg(Node);
   const auto Vector = GetVReg(Op->Vector);
+  // natemu slice1 (I5a): ROUND* with imm8 bit 3 clear raise PE when inexact: frintx (under the instruction's mode).
+  const bool FexcX = FexcRoundBegin(Op->Round);
+  if (FexcX) {
+    if (ElementSize == OpSize) {
+      if (ElementSize == IR::OpSize::i32Bit) frintx(Dst.S(), Vector.S());
+      else frintx(Dst.D(), Vector.D());
+    } else {
+      frintx(ConvertSubRegSize248(IROp), Dst.Q(), Vector.Q());
+    }
+    FexcRoundEnd(Op->Round);
+    return;
+  }
 
   if (HostSupportsSVE256 && Is256Bit) {
     const auto Mask = PRED_TMP_32B.Merging();
