@@ -649,7 +649,18 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
         // It is potentially correctness bearing in that sense, but that is a
         // side effect here and (if that behaviour is required) we should handle
         // that more explicitly later.
+        // natemu slice1 (I8 review): every instruction starts with the YMM upper halves its predecessors wrote stored, so the
+        // state at each fault and exit is exact; across a register-only vector instruction (VEX or SSE map, no memory
+        // operand: it can neither fault nor exit) they also stay cached (write-through), so a dependent chain is not a
+        // store and reload per instruction. At most 6 stay cached (no spill).
+        if (fexc_slice1) {
+          const uint8_t M = DecodedInfo->FexcMap;
+          Thread->OpDispatcher->FexcKeepAVXHigh = (M == FEXC_MAP_VEX || (M >= FEXC_MAP_TWO && M <= FEXC_MAP_0F3A)) &&
+                                                  !Thread->OpDispatcher->CanHaveSideEffects(TableInfo, DecodedInfo) &&
+                                                  Thread->OpDispatcher->FexcCachedAVXHigh() <= 6;
+        }
         Thread->OpDispatcher->FlushRegisterCache(true);
+        Thread->OpDispatcher->FexcKeepAVXHigh = false;
 
         if (ExtendedDebugInfo || Thread->OpDispatcher->CanHaveSideEffects(TableInfo, DecodedInfo)) {
           fexc_cf_inverted[InstAddress - GuestRIP] = Thread->OpDispatcher->FexcCFInverted();

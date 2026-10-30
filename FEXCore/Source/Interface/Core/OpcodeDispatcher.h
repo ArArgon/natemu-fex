@@ -1179,6 +1179,12 @@ public:
     _StoreContext(Size, Class, Value, Offset);
   }
 
+  // natemu slice1 (I8 review): the next per-instruction flush stores the written YMM upper halves but keeps them cached
+  // (Core.cpp sets it for a register-only vector instruction), and how many are cached now.
+  bool FexcKeepAVXHigh = false;
+  int FexcCachedAVXHigh() const {
+    return std::popcount(RegCache.Cached & (((1ull << (AVXHigh15Index - AVXHigh0Index + 1)) - 1) << AVXHigh0Index));
+  }
   void FlushRegisterCache(bool SRAOnly = false, bool MMXOnly = false) {
     // At block boundaries, fix up the carry flag.
     if (!SRAOnly) {
@@ -1200,6 +1206,7 @@ public:
     // We have an SRA only mode that exists as a hack to make register caching
     // less aggressive. We should get rid of this once RA can take it.
     uint64_t Mask = ~0ULL;
+    uint64_t Keep = 0;   // natemu: written back but still cached
 
     if (SRAOnly) {
       const uint64_t GPRMask = ((1ull << (AFIndex - GPR0Index + 1)) - 1) << GPR0Index;
@@ -1211,6 +1218,9 @@ public:
       // fault reports): each instruction stores the ones it wrote, so no write is dropped (VZEROUPPER's invalidation) or sunk.
       const uint64_t AVXHighMask = ((1ull << (AVXHigh15Index - AVXHigh0Index + 1)) - 1) << AVXHigh0Index;
       Mask &= (GPRMask | FPRMask | (fexc_slice1 ? (1ull << DFIndex) | AVXHighMask : 0));
+      // (I8 review: before a register-only vector instruction, FexcKeepAVXHigh (Core.cpp), the stored upper halves stay
+      // cached too, so the next one reads its register instead of reloading what was just stored: write-through.)
+      if (FexcKeepAVXHigh) Keep = AVXHighMask;
       Bits &= Mask;
     }
 
@@ -1247,7 +1257,9 @@ public:
         // TODO: this is all really confusing because of backwards iteration,
         // can we peel back that hack?
         const auto SizeInt = IR::OpSizeToSize(Size);
+        // natemu slice1 (I8 review): no STP for the YMM upper halves (one STR each, as a later single LDR reads them).
         if ((Bits & NextBit) && !Partial && Size >= OpSize::i32Bit && CacheIndexToContextOffset(Index - 1) == Offset - SizeInt &&
+            !(fexc_slice1 && Index >= AVXHigh0Index) &&
             (Offset - SizeInt) / SizeInt < 64) {
           LOGMAN_THROW_A_FMT(CacheIndexClass(Index - 1) == Class, "construction");
           LOGMAN_THROW_A_FMT((Offset % SizeInt) == 0, "construction");
@@ -1268,8 +1280,8 @@ public:
     }
 
     RegCache.Written &= ~Mask;
-    RegCache.Cached &= ~Mask;
-    RegCache.Partial &= ~Mask;
+    RegCache.Cached &= ~(Mask & ~Keep);
+    RegCache.Partial &= ~(Mask & ~Keep);
   }
 
   IR::OpSize GetGPROpSize() const {

@@ -1482,8 +1482,11 @@ void OpDispatchBuilder::AVX128_VPERMILImm(OpcodeArgs, IR::OpSize ElementSize) {
 
 void OpDispatchBuilder::AVX128_VHADDP(OpcodeArgs, IROps IROp, IR::OpSize ElementSize) {
   AVX128_VectorBinaryImpl(Op, OpSizeFromSrc(Op), ElementSize, [&](IR::OpSize ElementSize, Ref Src1, Ref Src2) {
+    if (fexc_slice1 && IROp == OP_VFADDP) {   // natemu slice1 (I8 review): VHADDPS/VHADDPD high element first, as HADDP (Vector.cpp)
+      return Ref(_VFAdd(OpSize::i128Bit, ElementSize, _VUnZip2(OpSize::i128Bit, ElementSize, Src1, Src2), _VUnZip(OpSize::i128Bit, ElementSize, Src1, Src2)));
+    }
     DeriveOp(Res, IROp, _VFAddP(OpSize::i128Bit, ElementSize, Src1, Src2));
-    return Res;
+    return Ref(Res);
   });
 }
 
