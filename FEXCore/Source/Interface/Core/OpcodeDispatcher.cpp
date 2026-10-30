@@ -813,7 +813,13 @@ void OpDispatchBuilder::LoopOp(OpcodeArgs) {
 
   Ref CondReg = LoadGPRRegister(X86State::REG_RCX, SrcSize);
   CondReg = Sub(OpSize, CondReg, 1);
-  StoreGPRRegister(X86State::REG_RCX, CondReg, SrcSize);
+  // natemu I10: with 0x67 in 64-bit mode the count is ECX, and writing it zero-extends into RCX (a 32-bit register write;
+  // QEMU and Bochs). FEX inserted the 32 bits and kept RCX[63:32].
+  if (fexc_slice1 && Is64BitMode && SrcSize == OpSize::i32Bit) {
+    StoreGPRRegister(X86State::REG_RCX, _Bfe(OpSize::i64Bit, 32, 0, CondReg));
+  } else {
+    StoreGPRRegister(X86State::REG_RCX, CondReg, SrcSize);
+  }
 
   // If LOOPE then jumps to target if RCX != 0 && ZF == 1
   // If LOOPNE then jumps to target if RCX != 0 && ZF == 0
@@ -3001,10 +3007,11 @@ void OpDispatchBuilder::AADOp(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::XLATOp(OpcodeArgs) {
-  Ref Src = MakeSegmentAddress(X86State::REG_RBX, Op->Flags, X86Tables::DecodeFlags::FLAG_DS_PREFIX);
   Ref Offset = LoadGPRRegister(X86State::REG_RAX, OpSize::i8Bit);
-
-  AddressMode A = {.Base = Src, .Index = Offset, .AddrSize = OpSize::i64Bit};
+  // natemu I10: the effective address is RBX + AL, or with 0x67 EBX + AL truncated to 32 bits, then the FS/GS base (FEX added
+  // the base to RBX first and never truncated).
+  AddressMode A = {.Segment = GetSegment(Op->Flags, X86Tables::DecodeFlags::FLAG_DS_PREFIX), .Base = LoadGPRRegister(X86State::REG_RBX),
+                   .Index = Offset, .AddrSize = (Op->Flags & X86Tables::DecodeFlags::FLAG_ADDRESS_SIZE) ? OpSize::i32Bit : OpSize::i64Bit};
   auto Res = _LoadMemGPRAutoTSO(OpSize::i8Bit, A, OpSize::i8Bit);
 
   StoreGPRRegister(X86State::REG_RAX, Res, OpSize::i8Bit);
@@ -3261,8 +3268,8 @@ void OpDispatchBuilder::DECOp(OpcodeArgs) {
 // written before them), RSI/RDI step by DF, RCX - 1, and the block exits to the instruction's own RIP, where the next
 // pass starts (a literal exit: the resident links it to the block that begins there, and its unlinking stop patches it,
 // so a stop or a fault lands between elements with RCX/RSI/RDI and RIP exact). REPE/REPNE CMPS/SCAS whose ZF ends the
-// repetition branch forward to the next instruction instead. No native backward branch. 64-bit addresses only (0x67 is
-// cut by the allowlist); ES:RDI takes no segment override, the DS:RSI source of MOVS/LODS/CMPS takes FS/GS.
+// repetition branch forward to the next instruction instead. No native backward branch. With 0x67 (I10) ESI/EDI/ECX
+// (below); ES:RDI takes no segment override, the DS:RSI source of MOVS/LODS/CMPS takes FS/GS.
 // CMPS reads [RDI] then [RSI] (FEX's and QEMU's order; the SDM gives none).
 void OpDispatchBuilder::FexcStringOp(OpcodeArgs, FexcString Kind) {
   const auto Size = OpSizeFromSrc(Op);
@@ -3272,18 +3279,24 @@ void OpDispatchBuilder::FexcStringOp(OpcodeArgs, FexcString Kind) {
   const bool UsesRSI = Kind == FexcString::MOVS || Kind == FexcString::LODS || Kind == FexcString::CMPS;
   const bool UsesRDI = Kind != FexcString::LODS;
   auto Load = [&](Ref Addr) { return _LoadMem(RegClass::GPR, Size, Addr, Invalid(), OpSize::i8Bit, MemOffsetType::SXTX, 1); };
+  // natemu I10: 0x67 (32-bit address size): ESI, EDI and ECX, read zero-extended; each update is truncated to 32 bits and
+  // zero-extended into the whole register (a 32-bit register write), as QEMU and Bochs do; the count test is on ECX.
+  const bool A32 = Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_ADDRESS_SIZE;
+  auto Reg = [&](uint32_t R) { return LoadGPRRegister(R, A32 ? OpSize::i32Bit : OpSize::iInvalid); };
+  auto Put = [&](uint32_t R, Ref V) { StoreGPRRegister(R, A32 ? _Bfe(OpSize::i64Bit, 32, 0, V) : V); };
 
   IRPair<IROp_CondJump> Done;
   if (Repeat) {
-    Done = CondJump(LoadGPRRegister(X86State::REG_RCX), CondClass::EQ);
+    Done = A32 ? CondJump(LoadGPRRegister(X86State::REG_RCX), Constant(0), Invalid(), Invalid(), CondClass::EQ, OpSize::i32Bit) :
+                 CondJump(LoadGPRRegister(X86State::REG_RCX), CondClass::EQ);
     auto Body = CreateNewCodeBlockAfter(GetCurrentBlock());
     SetFalseJumpTarget(Done, Body);
     SetCurrentCodeBlock(Body);
     StartNewBlock();
   }
 
-  Ref RSI = UsesRSI ? LoadGPRRegister(X86State::REG_RSI) : nullptr;
-  Ref RDI = UsesRDI ? LoadGPRRegister(X86State::REG_RDI) : nullptr;
+  Ref RSI = UsesRSI ? Reg(X86State::REG_RSI) : nullptr;
+  Ref RDI = UsesRDI ? Reg(X86State::REG_RDI) : nullptr;
   Ref Source = UsesRSI ? AppendSegmentOffset(RSI, Op->Flags, FEXCore::X86Tables::DecodeFlags::FLAG_DS_PREFIX) : nullptr;
   switch (Kind) {
   case FexcString::MOVS: {
@@ -3308,15 +3321,15 @@ void OpDispatchBuilder::FexcStringOp(OpcodeArgs, FexcString Kind) {
   }
   }
   if (UsesRDI) {
-    StoreGPRRegister(X86State::REG_RDI, OffsetByDir(RDI, Bytes));
+    Put(X86State::REG_RDI, OffsetByDir(RDI, Bytes));
   }
   if (UsesRSI) {
-    StoreGPRRegister(X86State::REG_RSI, OffsetByDir(RSI, Bytes));
+    Put(X86State::REG_RSI, OffsetByDir(RSI, Bytes));
   }
   if (!Repeat) {
     return;
   }
-  StoreGPRRegister(X86State::REG_RCX, Sub(OpSize::i64Bit, LoadGPRRegister(X86State::REG_RCX), 1));
+  Put(X86State::REG_RCX, Sub(OpSize::i64Bit, LoadGPRRegister(X86State::REG_RCX), 1));
 
   IRPair<IROp_Jump> Stopped;
   if (Compare) {
