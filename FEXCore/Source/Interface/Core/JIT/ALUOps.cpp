@@ -757,6 +757,65 @@ DEF_OP(PDep) {
       bdep(ARMEmitter::SubRegSize::i64Bit, VTMP1.Z(), VTMP1.Z(), VTMP2.Z());
       umov<ARMEmitter::SubRegSize::i64Bit>(Dest, VTMP1, 0);
     }
+  } else if (fexc_slice1) {
+    // natemu (I9): straight-line, no branch (admission refuses a backward branch): Hacker's Delight 7-5 "expand", log2(width)
+    // rounds. The forward pass compresses the mask as PEXT does and records each round's moved bits mv[i]; the backward pass
+    // moves the source bits left by 2^i into mv[i]'s positions, last round first; the result is masked by the original mask.
+    // Registers: TMP1..TMP4 and Dest; the source, the mask and mv[1], mv[2] in VTMP1/VTMP2 (Dest may alias either input, so both
+    // are saved before Dest is written); mv[3] in Dest, mv[4] in TMP4 (64-bit), the last round's in TMP2; mv[0] is recomputed
+    // from the mask at the end. 102 instructions at 64 bits, 82 at 32.
+    const auto M = TMP1.R(), MK = TMP2.R(), MP = TMP3.R(), T4 = TMP4.R();
+    const uint32_t Bits = EmitSize == ARMEmitter::Size::i64Bit ? 64 : 32;
+    const uint32_t Rounds = Bits == 64 ? 6 : 5;
+    auto prefix = [&](ARMEmitter::Register Out, ARMEmitter::Register In) {   // Out = the parallel-suffix XOR of In
+      eor(EmitSize, Out, In, In, ARMEmitter::ShiftType::LSL, 1);
+      for (uint32_t k = 2; k < Bits; k <<= 1) {
+        eor(EmitSize, Out, Out, Out, ARMEmitter::ShiftType::LSL, k);
+      }
+    };
+    ins(ARMEmitter::SubRegSize::i64Bit, VTMP1, 0, OrigInput);
+    ins(ARMEmitter::SubRegSize::i64Bit, VTMP1, 1, OrigMask);
+    mov(ARMEmitter::Size::i64Bit, M, OrigMask);
+    mvn(EmitSize, MK, M);
+    lsl(EmitSize, MK, MK, 1);
+    auto holder = [&](uint32_t i) -> ARMEmitter::Register { return i == Rounds - 1 ? MK : i == 3 ? Dest : T4; };
+    for (uint32_t i = 0; i < Rounds; ++i) {
+      const bool last = i == Rounds - 1;
+      prefix(MP, MK);
+      const auto MV = holder(i);
+      and_(EmitSize, MV, MP, M);
+      if (i == 1 || i == 2) ins(ARMEmitter::SubRegSize::i64Bit, VTMP2, i - 1, MV.X());
+      if (!last) {
+        eor(EmitSize, M, M, MV);
+        orr(EmitSize, M, M, MV, ARMEmitter::ShiftType::LSR, 1U << i);
+        bic(EmitSize, MK, MK, MP);
+      }
+    }
+    // Backward: X in TMP1, the shifted copy in TMP3.
+    const auto X = M, T = MP;
+    umov<ARMEmitter::SubRegSize::i64Bit>(X, VTMP1, 0);
+    auto step = [&](uint32_t i, ARMEmitter::Register MV) {
+      lsl(EmitSize, T, X, 1U << i);
+      bic(EmitSize, X, X, MV);
+      and_(EmitSize, T, T, MV);
+      orr(EmitSize, X, X, T);
+    };
+    for (uint32_t i = Rounds - 1; i >= 1; --i) {
+      ARMEmitter::Register MV = holder(i);
+      if (i == 1 || i == 2) {
+        MV = T4;
+        umov<ARMEmitter::SubRegSize::i64Bit>(T4, VTMP2, i - 1);
+      }
+      step(i, MV);
+    }
+    // mv[0] from the original mask (T4), into Dest; the result is masked by it.
+    umov<ARMEmitter::SubRegSize::i64Bit>(T4, VTMP1, 1);
+    mvn(EmitSize, MK, T4);
+    lsl(EmitSize, MK, MK, 1);
+    prefix(Dest, MK);
+    and_(EmitSize, Dest, Dest, T4);
+    step(0, Dest);
+    and_(EmitSize, Dest, X, T4);
   } else {
     // PDep implementation follows the ideas from
     // http://0x80.pl/articles/pdep-soft-emu.html ... Basically, iterate the *set*
@@ -833,6 +892,35 @@ DEF_OP(PExt) {
       bext(ARMEmitter::SubRegSize::i64Bit, VTMP1.Z(), VTMP1.Z(), VTMP2.Z());
       umov<ARMEmitter::SubRegSize::i64Bit>(Dest, VTMP1, 0);
     }
+  } else if (fexc_slice1) {
+    // natemu (I9): straight-line, no branch (admission refuses a backward branch): Hacker's Delight 7-4 "compress", log2(width)
+    // rounds; each moves the selected bits right by 2^i across the zeros of the mask below them (a parallel-suffix XOR of mk).
+    // x stays a subset of m, so x & mv = x & mp. Intel SDM PEXT: the mask's set bits, low to high, gather into DEST from bit 0.
+    // 83 instructions at 64 bits, 65 at 32.
+    const auto X = TMP1.R();
+    const auto M = TMP2.R();
+    const auto MK = TMP3.R();
+    const auto MP = TMP4.R();
+    const auto T = Dest;   // the inputs are dead once X and M hold them
+    const uint32_t Bits = EmitSize == ARMEmitter::Size::i64Bit ? 64 : 32;
+    mov(ARMEmitter::Size::i64Bit, M, Mask);
+    and_(EmitSize, X, Input, M);
+    mvn(EmitSize, MK, M);
+    lsl(EmitSize, MK, MK, 1);
+    for (uint32_t s = 1; s < Bits; s <<= 1) {
+      eor(EmitSize, MP, MK, MK, ARMEmitter::ShiftType::LSL, 1);
+      for (uint32_t k = 2; k < Bits; k <<= 1) {
+        eor(EmitSize, MP, MP, MP, ARMEmitter::ShiftType::LSL, k);
+      }
+      and_(EmitSize, T, X, MP);
+      bic(EmitSize, MK, MK, MP);
+      and_(EmitSize, MP, MP, M);
+      eor(EmitSize, M, M, MP);
+      orr(EmitSize, M, M, MP, ARMEmitter::ShiftType::LSR, s);
+      eor(EmitSize, X, X, T);
+      orr(EmitSize, X, X, T, ARMEmitter::ShiftType::LSR, s);
+    }
+    mov(EmitSize, Dest, X);
   } else {
     const auto MaskReg = TMP1;
     const auto BitReg = TMP2;

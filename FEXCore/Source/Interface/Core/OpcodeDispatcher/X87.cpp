@@ -844,6 +844,12 @@ void OpDispatchBuilder::X87FFREE(OpcodeArgs) {
   _InvalidateStack(Op->OP & 7);
 }
 
+// natemu (I9): FFREEP ST(i) frees ST(i) and then pops (ST(0) marked empty, TOP + 1), as QEMU and Bochs; FEX ran it as FINCSTP.
+void OpDispatchBuilder::X87FFREEP(OpcodeArgs) {
+  _InvalidateStack(Op->OP & 7);
+  _PopStackDestroy();
+}
+
 void OpDispatchBuilder::X87EMMS(OpcodeArgs) {
   // Tags all get set to 0b11
   _InvalidateStack(0xff);

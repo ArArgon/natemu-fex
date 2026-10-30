@@ -748,6 +748,7 @@ public:
   void X87EMMS(OpcodeArgs);
   void X87FCMOV(OpcodeArgs);
   void X87FFREE(OpcodeArgs);
+  void X87FFREEP(OpcodeArgs);
   void X87FLDCW(OpcodeArgs);
   void X87FNSAVE(OpcodeArgs);
   void X87FNSTENV(OpcodeArgs);
@@ -1217,7 +1218,11 @@ public:
       // natemu (fexc_slice1, I8): likewise the YMM upper halves (avx_high, the resident's XSAVE component 2 and the state a
       // fault reports): each instruction stores the ones it wrote, so no write is dropped (VZEROUPPER's invalidation) or sunk.
       const uint64_t AVXHighMask = ((1ull << (AVXHigh15Index - AVXHigh0Index + 1)) - 1) << AVXHigh0Index;
-      Mask &= (GPRMask | FPRMask | (fexc_slice1 ? (1ull << DFIndex) | AVXHighMask : 0));
+      // natemu (fexc_slice1, I9): and the MMX registers (MM0..MM7, the x87 slots' low halves): each instruction stores the
+      // ones it wrote (with FEX's FFFFH in bits 79:64), and none stays cached across an instruction, which may be x87 code
+      // writing the same slot through the stack pass.
+      const uint64_t MMMask = ((1ull << (MM7Index - MM0Index + 1)) - 1) << MM0Index;
+      Mask &= (GPRMask | FPRMask | (fexc_slice1 ? (1ull << DFIndex) | AVXHighMask | MMMask : 0));
       // (I8 review: before a register-only vector instruction, FexcKeepAVXHigh (Core.cpp), the stored upper halves stay
       // cached too, so the next one reads its register instead of reloading what was just stored: write-through.)
       if (FexcKeepAVXHigh) Keep = AVXHighMask;
@@ -2447,12 +2452,32 @@ private:
 
   void ChgStateX87_MMX() override {
     LOGMAN_THROW_A_FMT(MMXState == MMXState_X87, "Expected state to be x87");
+    // natemu (fexc_slice1, I9): every MMX instruction (not only a block's first) sets TOP = 0 and every tag valid, and only
+    // after its memory accesses, so a fault leaves both as they were: FexcEndMMX emits them at the instruction's end.
+    if (fexc_slice1) {
+      FexcMMXInst = true;
+      MMXState = MMXState_MMX;
+      return;
+    }
     _StackForceSlow();
     SetX87Top(Constant(0)); // top reset to zero
     _StoreContextGPR(OpSize::i8Bit, Constant(0xFFFFUL), offsetof(FEXCore::Core::CPUState, AbridgedFTW));
     MMXState = MMXState_MMX;
   }
 
+public:
+  bool FexcMMXInst = false;
+  // natemu (fexc_slice1, I9): after an MMX instruction's handler (Core.cpp): TOP = 0, the abridged tag byte FFH (all valid),
+  // then the next instruction starts in the x87 state again (FEX's MMX register cache is flushed per instruction in slice1).
+  void FexcEndMMX() {
+    if (!FexcMMXInst) return;
+    FexcMMXInst = false;
+    _StackForceSlow();
+    SetX87Top(Constant(0));
+    _StoreContextGPR(OpSize::i8Bit, Constant(0xFFUL), offsetof(FEXCore::Core::CPUState, AbridgedFTW));
+    MMXState = MMXState_X87;
+  }
+protected:
   void ChgStateMMX_X87() override {
     LOGMAN_THROW_A_FMT(MMXState == MMXState_MMX, "Expected state to be MMX");
     // The opcode dispatcher register cache is used for MMX, but the x87 pass register cache is used for x87, spill to

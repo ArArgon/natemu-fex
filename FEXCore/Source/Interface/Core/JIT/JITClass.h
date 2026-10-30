@@ -81,6 +81,7 @@ private:
   // FEXCore makes assumptions in the JIT about certain conditions being true.
   // In the rare case when those assumptions are broken, FEX needs to safely restart the JIT.
   RestartOptions RestartControl {};
+  void FexcEnsureRoom(size_t Extra);   // natemu: restart with a larger buffer before it could overflow
   bool RequiresFarARM64Jumps {};
   // Default to 6 instructions per SSA node.
   uint32_t SSANodeMultiplier {24};

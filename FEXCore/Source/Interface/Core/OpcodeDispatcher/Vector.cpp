@@ -843,7 +843,9 @@ void OpDispatchBuilder::PUNPCKLOp(OpcodeArgs, IR::OpSize ElementSize) {
   const auto Size = OpSizeFromSrc(Op);
 
   Ref Dest = LoadSourceFPR(Op, Op->Dest, Op->Flags);
-  Ref Src = LoadSourceFPR(Op, Op->Src[0], Op->Flags);
+  // natemu (I9): the MMX forms read m32 (SDM PUNPCKLBW/WD/DQ mm, mm/m32), not 8 bytes (a fault or device access beyond x86's).
+  Ref Src = fexc_slice1 && Size == OpSize::i64Bit && !Op->Src[0].IsGPR() ? LoadSourceFPR_WithOpSize(Op, Op->Src[0], OpSize::i32Bit, Op->Flags) :
+                                                                          LoadSourceFPR(Op, Op->Src[0], Op->Flags);
 
   auto ALUOp = _VZip(Size, ElementSize, Dest, Src);
   StoreResult_WithAVXInsert(VectorOpType::SSE, RegClass::FPR, Op, ALUOp);

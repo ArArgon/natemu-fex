@@ -279,7 +279,7 @@ constexpr std::array<DispatchTableEntry, 140> X87F64OpTable = {{
 
   // XXX: This should also set the x87 tag bits to empty
   // We don't support this currently, so just pop the stack
-  {OPD(0xDF, 0xC0), 8, &OpDispatchBuilder::Bind<&OpDispatchBuilder::X87ModifySTP, true>},
+  {OPD(0xDF, 0xC0), 8, &OpDispatchBuilder::X87FFREEP},
   {OPD(0xDF, 0xC8), 8, &OpDispatchBuilder::FXCH},
   {OPD(0xDF, 0xD0), 8, &OpDispatchBuilder::Bind<&OpDispatchBuilder::FSTToStack>},
   {OPD(0xDF, 0xD8), 8, &OpDispatchBuilder::Bind<&OpDispatchBuilder::FSTToStack>},
@@ -540,7 +540,7 @@ constexpr std::array<DispatchTableEntry, 140> X87F80OpTable = {{
 
   // XXX: This should also set the x87 tag bits to empty
   // We don't support this currently, so just pop the stack
-  {OPD(0xDF, 0xC0), 8, &OpDispatchBuilder::Bind<&OpDispatchBuilder::X87ModifySTP, true>},
+  {OPD(0xDF, 0xC0), 8, &OpDispatchBuilder::X87FFREEP},
   {OPD(0xDF, 0xC8), 8, &OpDispatchBuilder::FXCH},
   {OPD(0xDF, 0xD0), 8, &OpDispatchBuilder::Bind<&OpDispatchBuilder::FSTToStack>},
   {OPD(0xDF, 0xD8), 8, &OpDispatchBuilder::Bind<&OpDispatchBuilder::FSTToStack>},

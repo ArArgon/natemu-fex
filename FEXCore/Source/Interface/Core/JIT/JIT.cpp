@@ -893,6 +893,19 @@ CodeBuffer::CodeBufferAllocation Arm64JITCore::AllocateCodeBufferInSharedCache(s
   return AllocatedInfo;
 }
 
+// natemu: never write past the temporary code buffer. FEX relies on a guard page and a signal handler that restarts the
+// compile with a larger buffer (NeedsLargerJITSpace); fexc has no handler, so a block whose code outgrew its estimate
+// (24 bytes per IR node; PDEP/PEXT and the resident-helper forms emit far more) died with SIGBUS. Before each IR node, and
+// before the tail (stubs, thunks, RIP entries: `Extra` bytes), at least FexcJITSlack bytes must remain, else the compile
+// restarts with the doubled estimate, as FEX's handler would. No single node emits FexcJITSlack bytes.
+static uint32_t FexcUsableRange = 0;
+static constexpr uint32_t FexcJITSlack = 64 * 1024;
+void Arm64JITCore::FexcEnsureRoom(size_t Extra) {
+  if (GetCursorOffset() + FexcJITSlack + Extra > FexcUsableRange) {
+    FEXCore::UncheckedLongJump::LongJump(ThreadState->RestartJump, FEXCore::ToUnderlying(RestartOptions::Control::NeedsLargerJITSpace));
+  }
+}
+
 CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size, bool SingleInst, const FEXCore::IR::IRListView* IR,
                                                    FEXCore::Core::DebugData* DebugData, bool CheckTF) {
   FEXCORE_PROFILE_SCOPED("Arm64::CompileCode");
@@ -947,6 +960,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
   const uint32_t UsableBufferRange = TempCodeBufferInfo.Size - FEXC_HOST_PAGE_SIZE;
 
   SetBuffer(TempCodeBuffer, UsableBufferRange);
+  FexcUsableRange = UsableBufferRange;
 
   ThreadState->JITGuardPage = reinterpret_cast<uintptr_t>(TempCodeBuffer) + UsableBufferRange;
   ThreadState->JITGuardOverflowArgument = FEXCore::ToUnderlying(RestartOptions::Control::NeedsLargerJITSpace);
@@ -1039,6 +1053,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
     }
 
     for (auto [CodeNode, IROp] : IR->GetCode(BlockNode)) {
+      FexcEnsureRoom(0);
       if (fexc_slice1) FexcBeforeOp(IROp, CodeNode);
       const uint32_t FexcBegin = uint32_t(GetCursorAddress<uint8_t*>() - CodeData.BlockBegin);
       switch (IROp->Op) {
@@ -1066,6 +1081,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
     b_OrRestart(PendingTargetLabel);
   }
   PendingTargetLabel = nullptr;
+  FexcEnsureRoom(FexcStubs.size() * 64 + PendingJumpThunks.size() * 64 + DebugData->GuestOpcodes.size() * 20);
   if (fexc_slice1) FexcEmitStubs();
 
   ARMEmitter::ForwardLabel l_ExitLink;
