@@ -1207,7 +1207,10 @@ public:
 
       // natemu (fexc_slice1): DF is guest state the resident banks at a fault (the guest-state page), so cld/std store it
       // in their own instruction like a static register, never sunk to the block end or merged with a later write.
-      Mask &= (GPRMask | FPRMask | (fexc_slice1 ? 1ull << DFIndex : 0));
+      // natemu (fexc_slice1, I8): likewise the YMM upper halves (avx_high, the resident's XSAVE component 2 and the state a
+      // fault reports): each instruction stores the ones it wrote, so no write is dropped (VZEROUPPER's invalidation) or sunk.
+      const uint64_t AVXHighMask = ((1ull << (AVXHigh15Index - AVXHigh0Index + 1)) - 1) << AVXHigh0Index;
+      Mask &= (GPRMask | FPRMask | (fexc_slice1 ? (1ull << DFIndex) | AVXHighMask : 0));
       Bits &= Mask;
     }
 
@@ -1448,7 +1451,7 @@ private:
   void MOVScalarOpImpl(OpcodeArgs, IR::OpSize ElementSize);
   void VMOVScalarOpImpl(OpcodeArgs, IR::OpSize ElementSize);
 
-  Ref VFCMPOpImpl(OpSize Size, IR::OpSize ElementSize, Ref Src1, Ref Src2, uint8_t CompType);
+  Ref VFCMPOpImpl(OpSize Size, IR::OpSize ElementSize, Ref Src1, Ref Src2, uint8_t CompType, bool FexcInner = false);
 
   void VTESTOpImpl(OpSize SrcSize, IR::OpSize ElementSize, Ref Src1, Ref Src2);
 
@@ -2567,8 +2570,9 @@ private:
   RefPair _LoadMemPairAutoTSO(RegClass Class, OpSize Size, const AddressMode& A, OpSize Align = OpSize::i8Bit) {
     const bool AtomicTSO = IsTSOEnabled(Class) && !A.NonTSO;
 
-    // Use ldp if possible, otherwise fallback on two loads.
-    if (!AtomicTSO && !A.Segment && Size >= OpSize::i32Bit && Size <= OpSize::i128Bit) {
+    // Use ldp if possible, otherwise fallback on two loads. natemu slice1 (I8): with an FS/GS base too (SelectPairAddressMode
+    // adds it), so a 32-byte operand is always one access.
+    if (!AtomicTSO && (!A.Segment || fexc_slice1) && Size >= OpSize::i32Bit && Size <= OpSize::i128Bit) {
       const auto B = SelectPairAddressMode(A, Size);
       return LoadMemPair(Class, Size, B.Base, B.Offset);
     }
@@ -2606,8 +2610,8 @@ private:
     const auto SizeInt = IR::OpSizeToSize(Size);
     const bool AtomicTSO = IsTSOEnabled(Class) && !A.NonTSO;
 
-    // Use stp if possible, otherwise fallback on two stores.
-    if (!AtomicTSO && !A.Segment && Size >= OpSize::i32Bit && Size <= OpSize::i128Bit) {
+    // Use stp if possible, otherwise fallback on two stores. natemu slice1 (I8): with an FS/GS base too (one store site).
+    if (!AtomicTSO && (!A.Segment || fexc_slice1) && Size >= OpSize::i32Bit && Size <= OpSize::i128Bit) {
       const auto B = SelectPairAddressMode(A, Size);
       _StoreMemPair(Class, Size, Value1, Value2, B.Base, B.Offset);
     } else {

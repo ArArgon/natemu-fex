@@ -132,6 +132,21 @@ void OpDispatchBuilder::AVX128_VMOVAPS(OpcodeArgs) {
   const auto SrcSize = GetSrcSize(Op);
   const auto Is128Bit = SrcSize == Core::CPUState::XMM_SSE_REG_SIZE;
 
+  if (Is128Bit && fexc_slice1 && fexc_align16.count(Op->PC) && !(Op->Dest.IsGPR() && Op->Src[0].IsGPR())) {
+    // natemu slice1 (I8): VMOVAPS/VMOVAPD/VMOVDQA VEX.128 with a memory operand are single-copy atomic on processors that
+    // enumerate AVX (SDM Vol.3 9.1.1), as MOVAPS (patch 0018): one 16-byte aligned LDP/STP of two X registers (FEAT_LSE2),
+    // its alignment checked first (#GP(0); fexc_align16 holds exactly the aligned forms here).
+    if (!Op->Dest.IsGPR()) {
+      auto Src = AVX128_LoadSource_WithOpSize(Op, Op->Src[0], Op->Flags, false);
+      Ref Addr = MakeSegmentAddress(Op, Op->Dest);
+      _StoreMemPair(RegClass::GPR, OpSize::i64Bit, _VExtractToGPR(OpSize::i128Bit, OpSize::i64Bit, Src.Low, 0),
+                    _VExtractToGPR(OpSize::i128Bit, OpSize::i64Bit, Src.Low, 1), Addr, 0);
+    } else {
+      RefPair V = LoadMemPair(RegClass::GPR, OpSize::i64Bit, MakeSegmentAddress(Op, Op->Src[0]), 0);
+      AVX128_StoreResult_WithOpSize(Op, Op->Dest, RefPair {.Low = _VLoadTwoGPRs(V.Low, V.High), .High = LoadZeroVector(OpSize::i128Bit)});
+    }
+    return;
+  }
   if (Is128Bit) {
     // Zero upper 128-bits
     auto Src = AVX128_LoadSource_WithOpSize(Op, Op->Src[0], Op->Flags, false);
@@ -357,6 +372,11 @@ void OpDispatchBuilder::AVX128_MOVVectorNT(OpcodeArgs) {
     ///< MOVNTDQA load non-temporal comes from SSE4.1 and is extended by AVX/AVX2.
     RefPair Src {};
     Ref SrcAddr = LoadSourceGPR(Op, Op->Src[0], Op->Flags, {.LoadData = false});
+    if (fexc_slice1) {
+      // natemu slice1 (I8): plain loads (recorded sites), a 32-byte operand as one LDP of two Q registers.
+      Src = AVX128_LoadSource_WithOpSize(Op, Op->Src[0], Op->Flags, !Is128Bit);
+      if (Is128Bit) Src.High = LoadZeroVector(OpSize::i128Bit);
+    } else {
     Src.Low = _VLoadNonTemporal(OpSize::i128Bit, SrcAddr, 0);
 
     if (Is128Bit) {
@@ -364,9 +384,15 @@ void OpDispatchBuilder::AVX128_MOVVectorNT(OpcodeArgs) {
     } else {
       Src.High = _VLoadNonTemporal(OpSize::i128Bit, SrcAddr, 16);
     }
+    }
     AVX128_StoreResult_WithOpSize(Op, Op->Dest, Src);
   } else {
     auto Src = AVX128_LoadSource_WithOpSize(Op, Op->Src[0], Op->Flags, !Is128Bit, MemoryAccessType::STREAM);
+    if (fexc_slice1) {
+      // natemu slice1 (I8): a plain store (a recorded site; ordered as any store, allowed for MOVNT), a 32-byte one as one STP.
+      AVX128_StoreResult_WithOpSize(Op, Op->Dest, Is128Bit ? RefPair {.Low = Src.Low} : Src);
+      return;
+    }
     Ref Dest = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.LoadData = false});
 
     if (Is128Bit) {
@@ -410,7 +436,7 @@ void OpDispatchBuilder::AVX128_VMOVLP(OpcodeArgs) {
     // Bits[63:0] come from Src2[63:0]
     // Bits[127:64] come from Src1[127:64]
     auto Src2 = MakeSegmentAddress(Op, Op->Src[1]);
-    Ref Result_Low = _VLoadVectorElement(OpSize::i128Bit, OpSize::i64Bit, Src1.Low, 0, Src2);
+    Ref Result_Low = FexcLoadElement(OpSize::i128Bit, OpSize::i64Bit, Src1.Low, 0, Src2);
     Ref ZeroVector = LoadZeroVector(OpSize::i128Bit);
 
     AVX128_StoreResult_WithOpSize(Op, Op->Dest, RefPair {.Low = Result_Low, .High = ZeroVector});
@@ -432,14 +458,14 @@ void OpDispatchBuilder::AVX128_VMOVHP(OpcodeArgs) {
     ///< VMOVHPS/PD mem64, xmm1
     // Need to store Bits[127:64]. Use a vector element store.
     auto Dest = MakeSegmentAddress(Op, Op->Dest);
-    _VStoreVectorElement(OpSize::i128Bit, OpSize::i64Bit, Src1.Low, 1, Dest);
+    FexcStoreElement(OpSize::i128Bit, OpSize::i64Bit, Src1.Low, 1, Dest);
   } else if (!Op->Src[1].IsGPR()) {
     ///< VMOVHPS/PD xmm2, xmm1, mem64
     auto Src2 = MakeSegmentAddress(Op, Op->Src[1]);
 
     // Bits[63:0] come from Src1[63:0]
     // Bits[127:64] come from Src2[63:0]
-    Ref Result_Low = _VLoadVectorElement(OpSize::i128Bit, OpSize::i64Bit, Src1.Low, 1, Src2);
+    Ref Result_Low = FexcLoadElement(OpSize::i128Bit, OpSize::i64Bit, Src1.Low, 1, Src2);
     Ref ZeroVector = LoadZeroVector(OpSize::i128Bit);
 
     AVX128_StoreResult_WithOpSize(Op, Op->Dest, RefPair {.Low = Result_Low, .High = ZeroVector});
@@ -513,7 +539,13 @@ void OpDispatchBuilder::AVX128_VBROADCAST(OpcodeArgs, IR::OpSize ElementSize) {
   } else {
     // Get the address to broadcast from into a GPR.
     Ref Address = MakeSegmentAddress(Op, Op->Src[0], GetGPROpSize());
+    if (fexc_slice1) {
+      // natemu slice1 (I8): a plain load of the element (a recorded site) and a register duplicate, not FEX's ld1r.
+      Src.Low = _LoadMemAutoTSO(RegClass::FPR, ElementSize, Address, OpSize::i8Bit);
+      if (ElementSize != OpSize::i128Bit) Src.Low = _VDupElement(OpSize::i128Bit, ElementSize, Src.Low, 0);
+    } else {
     Src.Low = _VBroadcastFromMem(OpSize::i128Bit, ElementSize, Address);
+    }
   }
 
   if (Is128Bit) {
@@ -769,7 +801,7 @@ void OpDispatchBuilder::AVX128_PExtr(OpcodeArgs, IR::OpSize ElementSize) {
 
   // If we are storing to memory then we store the size of the element extracted
   Ref Dest = MakeSegmentAddress(Op, Op->Dest);
-  _VStoreVectorElement(OpSize::i128Bit, OverridenElementSize, Src.Low, Index, Dest);
+  FexcStoreElement(OpSize::i128Bit, OverridenElementSize, Src.Low, Index, Dest);
 }
 
 void OpDispatchBuilder::AVX128_ExtendVectorElements(OpcodeArgs, IR::OpSize ElementSize, IR::OpSize DstElementSize, bool Signed) {
@@ -921,7 +953,7 @@ void OpDispatchBuilder::AVX128_PINSRImpl(OpcodeArgs, IR::OpSize ElementSize, con
   } else {
     // If loading from memory then we only load the element size
     auto Src2 = MakeSegmentAddress(Op, Src2Op);
-    Result.Low = _VLoadVectorElement(OpSize::i128Bit, ElementSize, Src1.Low, Index, Src2);
+    Result.Low = FexcLoadElement(OpSize::i128Bit, ElementSize, Src1.Low, Index, Src2);
   }
 
   Result.High = LoadZeroVector(OpSize::i128Bit);
@@ -2039,13 +2071,19 @@ void OpDispatchBuilder::AVX128_VFMAddSubImpl(OpcodeArgs, bool AddSub, uint8_t Sr
     ConstantEOR = LoadAndCacheNamedVectorConstant(
       OpSize::i128Bit, ElementSize == OpSize::i32Bit ? NAMED_VECTOR_PSUBADDPS_INVERT : NAMED_VECTOR_PSUBADDPD_INVERT);
   }
-  auto InvertedSourceLow = _VXor(OpSize::i128Bit, Sources[AddendIdx - 1].Low, ConstantEOR);
+  // natemu slice1 (I8): the subtracted lanes' addend negated by fneg, which keeps a NaN's sign under FPCR.AH = 1 (x86 returns
+  // the NaN operand itself); FEX's XOR with the sign mask flipped it. The lanes come from the sign mask.
+  auto FexcNegate = [&](Ref Addend) {
+    Ref Lanes = _VSShrI(OpSize::i128Bit, ElementSize, ConstantEOR, ElementSize == OpSize::i32Bit ? 31 : 63);
+    return _VBSL(OpSize::i128Bit, Lanes, _VFNeg(OpSize::i128Bit, ElementSize, Addend), Addend);
+  };
+  auto InvertedSourceLow = fexc_slice1 ? FexcNegate(Sources[AddendIdx - 1].Low) : _VXor(OpSize::i128Bit, Sources[AddendIdx - 1].Low, ConstantEOR);
 
   Result.Low = _VFMLA(OpSize::i128Bit, ElementSize, Sources[Src1Idx - 1].Low, Sources[Src2Idx - 1].Low, InvertedSourceLow);
   if (Is128Bit) {
     Result.High = LoadZeroVector(OpSize::i128Bit);
   } else {
-    auto InvertedSourceHigh = _VXor(OpSize::i128Bit, Sources[AddendIdx - 1].High, ConstantEOR);
+    auto InvertedSourceHigh = fexc_slice1 ? FexcNegate(Sources[AddendIdx - 1].High) : _VXor(OpSize::i128Bit, Sources[AddendIdx - 1].High, ConstantEOR);
     Result.High = _VFMLA(OpSize::i128Bit, ElementSize, Sources[Src1Idx - 1].High, Sources[Src2Idx - 1].High, InvertedSourceHigh);
   }
   AVX128_StoreResult_WithOpSize(Op, Op->Dest, Result);

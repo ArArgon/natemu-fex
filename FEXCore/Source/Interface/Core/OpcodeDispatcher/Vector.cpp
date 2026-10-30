@@ -531,6 +531,10 @@ void OpDispatchBuilder::AVXInsertScalarRound(OpcodeArgs, IR::OpSize ElementSize)
 
 Ref OpDispatchBuilder::InsertScalarFCMPOpImpl(OpSize Size, IR::OpSize OpDstSize, IR::OpSize ElementSize, Ref Src1, Ref Src2,
                                               uint8_t CompType, bool ZeroUpperBits) {
+  // natemu slice1 (I8): VCMPSS/VCMPSD with an AVX predicate: the packed form's exact flags on the low element (VFCMPOpImpl).
+  if (fexc_slice1 && CompType >= 8 && !ZeroUpperBits) {
+    return _VInsElement(OpDstSize, ElementSize, 0, 0, Src1, VFCMPOpImpl(ElementSize, ElementSize, Src1, Src2, CompType));
+  }
   switch (static_cast<VectorCompareType>(CompType)) {
   case VectorCompareType::EQ_OQ:
   case VectorCompareType::EQ_OS: return _VFCMPScalarInsert(Size, ElementSize, Src1, Src2, FloatCompareOp::EQ, ZeroUpperBits);
@@ -2897,7 +2901,26 @@ void OpDispatchBuilder::MOVBetweenGPR_FPR(OpcodeArgs, VectorOpType VectorType) {
   }
 }
 
-Ref OpDispatchBuilder::VFCMPOpImpl(OpSize Size, IR::OpSize ElementSize, Ref Src1, Ref Src2, uint8_t CompType) {
+Ref OpDispatchBuilder::VFCMPOpImpl(OpSize Size, IR::OpSize ElementSize, Ref Src1, Ref Src2, uint8_t CompType, bool FexcInner) {
+  if (fexc_slice1 && CompType >= 8 && !FexcInner) {
+    // natemu slice1 (I8): the AVX predicates 8..31 with x86's MXCSR flags (SDM Vol.2 CMPPS, Table 3-1: "Signals #IA on
+    // QNAN"). FEX lowers each to fcmeq (quiet) or fcmgt/fcmge (signalling) whatever the predicate says, and FALSE/TRUE to a
+    // constant (no flag at all). Here: Ordered from two quiet fcmeq (IE for an SNaN, DE for a denormal: every predicate),
+    // FEX's lowering on the operands with their unordered lanes zeroed (no NaN reaches a signalling compare), then the
+    // predicate's unordered value, and for a signalling predicate one fcmge of the operands (IE for a QNaN) whose all-zero
+    // contribution keeps it live.
+    const uint8_t C = CompType & 15;
+    const bool Unordered = C == 3 || C == 4 || C == 5 || C == 6 || C == 8 || C == 9 || C == 10 || C == 15;
+    const bool Signalling = (C == 1 || C == 2 || C == 5 || C == 6 || C == 9 || C == 10 || C == 13 || C == 14) != (CompType >= 16);
+    Ref Ordered = _VAnd(Size, _VFCMPEQ(Size, ElementSize, Src1, Src1), _VFCMPEQ(Size, ElementSize, Src2, Src2));
+    Ref Result = _VAnd(Size, VFCMPOpImpl(Size, ElementSize, _VAnd(Size, Src1, Ordered), _VAnd(Size, Src2, Ordered), CompType, true), Ordered);
+    if (Unordered) Result = _VOr(Size, Result, _VNot(Size, Ordered));
+    if (Signalling) {
+      Ref Flag = _VFCMPLE(Size, ElementSize, Src1, Src2);
+      Result = _VOr(Size, Result, _VAnd(Size, Flag, _VNot(Size, Flag)));
+    }
+    return Result;
+  }
   switch (static_cast<VectorCompareType>(CompType)) {
   case VectorCompareType::EQ_OQ:
   case VectorCompareType::EQ_OS: return _VFCMPEQ(Size, ElementSize, Src1, Src2);
