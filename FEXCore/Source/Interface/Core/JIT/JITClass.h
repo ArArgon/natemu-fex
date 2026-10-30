@@ -560,6 +560,8 @@ private:
   bool FexcX87Op(const IR::IROp_Header* IROp);
   void FexcX87Begin();
   void FexcX87End();
+  // natemu (fexc), profile slice1 (I6b): PCMPxSTRx's intermediate result by the resident's `svc #STRING` (shim/fexc_sites.inc).
+  void FexcStringSvc(const IR::IROp_Header* IROp, IR::Ref Node);
   bool FexcRoundBegin(IR::RoundMode Mode);
   void FexcRoundEnd(IR::RoundMode Mode);
   uint32_t FexcNegLoad {};

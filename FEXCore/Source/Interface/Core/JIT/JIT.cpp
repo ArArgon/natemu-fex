@@ -466,6 +466,10 @@ void Arm64JITCore::Op_Unhandled(const IR::IROp_Header* IROp, IR::Ref Node) {
     } break;
 
     case FABI_I32_I64_I64_V128_V128_I16: {
+      if (fexc_slice1) { // natemu slice1 (I6b): the resident's string compare (svc #STRING), no host helper
+        FexcStringSvc(IROp, Node);
+        break;
+      }
       // Linux Reg/Win32 Reg:
       // stack: FallbackHandler
       // x30: return
@@ -500,6 +504,10 @@ void Arm64JITCore::Op_Unhandled(const IR::IROp_Header* IROp, IR::Ref Node) {
       FillI32Result();
     } break;
     case FABI_I32_V128_V128_I16: {
+      if (fexc_slice1) { // natemu slice1 (I6b): as above
+        FexcStringSvc(IROp, Node);
+        break;
+      }
       // Linux Reg/Win32 Reg:
       // tmp4 (x4/x13): FallbackHandler
       // x30: return

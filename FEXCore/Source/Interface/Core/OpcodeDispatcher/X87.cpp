@@ -624,6 +624,10 @@ void OpDispatchBuilder::FXCH(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::X87FYL2X(OpcodeArgs, bool IsFYL2XP1) {
+  if (fexc_slice1) {
+    _FexcX87Svc(Op->OP & 0xff);   // natemu slice1 (I6b): as X87OpHelper
+    return;
+  }
   if (IsFYL2XP1) {
     _F80FYL2XP1Stack();
   } else {
@@ -715,6 +719,17 @@ void OpDispatchBuilder::FTST(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::X87OpHelper(OpcodeArgs, FEXCore::IR::IROps IROp, bool ZeroC2) {
+  using enum FEXCore::IR::IROps;
+  const bool Helper = IROp == OP_F80F2XM1STACK || IROp == OP_F80PTANSTACK || IROp == OP_F80ATANSTACK || IROp == OP_F80FPREM1STACK ||
+                      IROp == OP_F80FPREMSTACK || IROp == OP_F80SINCOSSTACK || IROp == OP_F80SCALESTACK || IROp == OP_F80SINSTACK ||
+                      IROp == OP_F80COSSTACK;   // not FCHS, FABS, FSQRT, FRNDINT (native code)
+  if (fexc_slice1 && Helper) {
+    // natemu slice1 (I6b): the transcendental, remainder and scale forms run whole in the resident (svc #X87, the D9 opcode's
+    // second byte), on the x87 state the stack pass leaves in the guest-state page at every instruction boundary: the x87 rules
+    // FEX's F64 helpers lack (C2 out of range, FPREM's quotient bits and partial remainder, stack faults, the exception word).
+    _FexcX87Svc(Op->OP & 0xff);
+    return;
+  }
   DeriveOp(Result, IROp, _F80SCALEStack());
   if (ZeroC2) {
     SetRFLAG<FEXCore::X86State::X87FLAG_C2_LOC>(Constant(0));

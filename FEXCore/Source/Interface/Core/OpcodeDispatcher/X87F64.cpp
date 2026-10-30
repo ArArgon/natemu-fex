@@ -431,6 +431,10 @@ void OpDispatchBuilder::FCOMIF64(OpcodeArgs, IR::OpSize Width, bool Integer, OpD
 }
 
 void OpDispatchBuilder::X87FXTRACTF64(OpcodeArgs) {
+  if (fexc_slice1) {
+    _FexcX87Svc(Op->OP & 0xff);   // natemu slice1 (I6b): as X87OpHelper (a denormal double splits exactly there)
+    return;
+  }
   // Split node into SIG and EXP while handling the special zero case.
   // i.e. if val == 0.0, then sig = 0.0, exp = -inf
   // if val == -0.0, then sig = -0.0, exp = -inf
