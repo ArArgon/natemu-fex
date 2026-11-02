@@ -140,6 +140,7 @@ void OpDispatchBuilder::FISTF64(OpcodeArgs, bool Truncate) {
       Inexact = _Andn(OpSize::i64Bit, _Lshr(OpSize::i64Bit, _Or(OpSize::i64Bit, Diff2, _Neg(OpSize::i64Bit, Diff2)), Constant(63)), _Neg(OpSize::i64Bit, Mask));
     }
     Value = _Or(OpSize::i64Bit, _Andn(OpSize::i64Bit, Value, Mask), _And(OpSize::i64Bit, Mask, Constant(Indefinite)));
+    fexc_x87_extra[Op->PC].invalid = OutOfRange;   // natemu slice1 (I5c): an unmasked IE stores nothing (the x87 check's operand)
     StoreResultGPR_WithOpSize(Op, Op->Dest, Value, Size, OpSize::i8Bit, MemoryAccessType::NONTSO);
     if (Size != OpSize::i64Bit) {
       // After the store (a #PF there leaves FSW as it was, except the FPSR flags already accumulated; plan I6 deviations).

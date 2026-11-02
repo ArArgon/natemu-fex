@@ -5,6 +5,7 @@
 #include "Interface/IR/IREmitter.h"
 #include "Interface/IR/Passes.h"
 #include <fexc_hook.h>
+#include <fexc_precision.h>
 #include "Interface/IR/PassManager.h"
 #include "FEXCore/IR/IR.h"
 #include "FEXCore/Utils/Profiler.h"
@@ -244,6 +245,13 @@ private:
     }
     case OpSize::i64Bit: {
       if (fexc_slice1 && Op->StoreSize == OpSize::i64Bit) StackNode = QuietSNaN(StackNode);   // natemu slice1 (I6)
+      if (fexc_slice1 && Op->StoreSize == OpSize::i64Bit && (fexc_x87_unmasked & 16)) {
+        // natemu slice1 (I5c): a nonzero double denormal stored to m64 is tiny (exact): x86's unmasked UE (SDM Vol.1 8.5.5).
+        Ref Bits = IREmit->_VExtractToGPR(OpSize::i64Bit, OpSize::i64Bit, StackNode, 0);
+        Ref Hi = IREmit->_Lshr(OpSize::i64Bit, IREmit->_Sub(OpSize::i64Bit, IREmit->_Lshl(OpSize::i64Bit, Bits, GetConstant(1)), GetConstant(1)),
+                               GetConstant(53));
+        Tiny = IREmit->_Lshr(OpSize::i64Bit, IREmit->_Sub(OpSize::i64Bit, Hi, GetConstant(1)), GetConstant(63));
+      }
       IREmit->_StoreMemFPR(Op->StoreSize, StackNode, AddrNode, Offset, Align, OffsetType, OffsetScale);
       break;
     }
@@ -287,6 +295,11 @@ private:
   bool Pushed = false, C1Zero = false;
   Ref FaultResult(Ref Value);
   Ref QuietSNaN(Ref Value);
+  // natemu slice1 (I5c): the guest RIP of the instruction being lowered, an FST m64's exact-tiny bit (an unmasked UE stores
+  // nothing), and the end of an instruction: its check operands recorded, its flags folded (FexcEndInstruction).
+  uint64_t FexcRip = ~0ull;
+  Ref Tiny {};
+  void FexcEndInstruction();
   void StoreStackValueAtOffset_Slow(Ref Value, uint8_t Offset = 0, bool SetValid = true);
   // Update Top value in slow path for a pop
   void UpdateTopForPop_Slow(bool InvalidateTag = true);
@@ -455,7 +468,33 @@ inline void X87StackOptimization::FlushStackFault() {
   Pushed = C1Zero = false;
 }
 
+inline void X87StackOptimization::FexcEndInstruction() {
+  // natemu slice1 (I5c): the instruction's check operands for FexcPrecision::PlaceFPChecks, and (unmasked x87 exceptions) its
+  // flags from the pending byte into the exception word, after everything it committed.
+  if (FexcRip != ~0ull && (Fault || Overflow || SNaN || Tiny)) {
+    auto& E = fexc_x87_extra[FexcRip];   // (FIST's out-of-range bit, the dispatcher's, may be there already)
+    E.fault = Fault;
+    E.overflow = Overflow;
+    if (SNaN) E.invalid = SNaN;
+    E.tiny = Tiny;
+  }
+  if (FexcRip != ~0ull && fexc_x87.count(FexcRip) && fexc_x87_unmasked) {
+    Ref Pending = IREmit->_LoadContextGPR(OpSize::i8Bit, FEXC_X87_PENDING);
+    // A stack fault has precedence over the operation's own exceptions (SDM Vol.1 4.9.2): their flags are dropped.
+    if (Fault) Pending = IREmit->_And(OpSize::i32Bit, Pending, IREmit->_Sub(OpSize::i32Bit, Fault, GetConstant(1)));
+    Ref Word = IREmit->_LoadContextGPR(OpSize::i32Bit, FEXC_X87_EXCEPTIONS);
+    IREmit->_StoreContextGPR(OpSize::i32Bit, IREmit->_Or(OpSize::i32Bit, Word, Pending), FEXC_X87_EXCEPTIONS);
+    IREmit->_StoreContextGPR(OpSize::i8Bit, GetConstant(0), FEXC_X87_PENDING);
+  }
+  Tiny = {};
+  if (Fault || SNaN || Pushed || C1Zero) {
+    FlushStackFault();
+  }
+}
+
 inline void X87StackOptimization::Reset() {
+  FexcRip = ~0ull;
+  Tiny = {};
   Fault = Overflow = OpFault = SNaN = {};
   Pushed = C1Zero = false;
   // natemu slice1 (I6): always the slow path, so the x87 state is in the guest-state page at every instruction boundary
@@ -841,9 +880,10 @@ void X87StackOptimization::Run(IREmitter* Emit) {
 
     IREmit->SetCurrentCodeBlock(BlockNode);
     for (auto [CodeNode, IROp] : CurrentIR.GetCode(BlockNode)) {
-      if (fexc_slice1 && IROp->Op == OP_GUESTOPCODE && (Fault || SNaN || Pushed || C1Zero)) {
-        IREmit->SetWriteCursorBefore(CodeNode);   // natemu slice1 (I6): the previous instruction's stack fault flags
-        FlushStackFault();
+      if (fexc_slice1 && IROp->Op == OP_GUESTOPCODE) {
+        IREmit->SetWriteCursorBefore(CodeNode);   // natemu slice1 (I6, I5c): the previous instruction's stack fault flags, its checks
+        FexcEndInstruction();
+        FexcRip = HeaderOp->OriginalRIP + IROp->C<IROp_GuestOpcode>()->GuestEntryOffset;
         continue;
       }
       if (!LoweredX87(IROp->Op)) {
@@ -1352,7 +1392,7 @@ void X87StackOptimization::Run(IREmitter* Emit) {
     IREmit->SetWriteCursorBefore(LastCodeNode);
     SynchronizeStackValues();
     FlushCachedRegs();
-    if (fexc_slice1) FlushStackFault();
+    if (fexc_slice1) FexcEndInstruction();
   }
 }
 

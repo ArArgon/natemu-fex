@@ -2896,6 +2896,19 @@
         "DestSize": "OpSize::i64Bit",
         "JITDispatch": true
       },
+      "FexcSimdCheck u32:$Mask": {
+        "Desc": ["natemu slice1 (I5c): the SSE/AVX instruction's FPSR flags against the unmasked MXCSR exceptions $Mask (FPSR bit",
+                 "order): a hit branches to its #XM stub, else the flags fold into the SIMD flag byte (FexcPrecision::PlaceFPChecks)"
+                ],
+        "HasSideEffects": true
+      },
+      "FexcX87Check GPR:$Fault, GPR:$Overflow, GPR:$Invalid, GPR:$Tiny, u32:$Mask, u8:$Store": {
+        "Desc": ["natemu slice1 (I5c): the x87 instruction's flags (the pending byte, and its stack fault, overflow, invalid-operand and",
+                 "exact-tiny bits in 8..11) against $Mask: a hit branches to its x87 stub (an unmasked exception that leaves the operands",
+                 "unaltered; $Store: an FST/FSTP m32/m64)"
+                ],
+        "HasSideEffects": true
+      },
       "FexcX87Svc u8:$Function": {
         "Desc": ["natemu slice1 (I6b): the x87 instruction D9 $Function (F2XM1 FYL2X FPTAN FPATAN FXTRACT FPREM1 FPREM FYL2XP1",
                  "FSINCOS FSCALE FSIN FCOS) run whole by the resident on the x87 state in the guest-state page (svc #X87)"

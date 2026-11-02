@@ -702,6 +702,9 @@ void DeadFlagCalculationEliminination::OptimizeParity(IREmitter* IREmit, IRListV
 
 void DeadFlagCalculationEliminination::Run(IREmitter* IREmit) {
   FEXCORE_PROFILE_SCOPED("PassManager::DFE");
+  if (fexc_slice1) {
+    FexcPrecision::PlaceFPChecks(IREmit);   // natemu slice1 (I5c): unmasked floating-point exception checks (fault points)
+  }
 
   auto CurrentIR = IREmit->ViewIR();
   fextl::deque<uint32_t> Worklist;

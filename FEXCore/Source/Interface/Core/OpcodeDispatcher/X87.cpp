@@ -789,6 +789,13 @@ Ref OpDispatchBuilder::ReconstructFSW_Helper(Ref T) {
     FSW = _Or(OpSize::i64Bit, FSW, _And(OpSize::i32Bit, Ex, Constant(0x41)));
     FSW = _Or(OpSize::i64Bit, FSW, _And(OpSize::i32Bit, _Lshr(OpSize::i32Bit, Ex, Constant(6)), Constant(2)));
     FSW = _Or(OpSize::i64Bit, FSW, _And(OpSize::i32Bit, _Lshl(OpSize::i32Bit, Ex, Constant(1)), Constant(0x3c)));
+    if (const uint64_t Unmasked = fexc_x87_unmasked) {
+      // natemu slice1 (I5c): ES (bit 7) and B (bit 15) are set while an exception flag whose mask is clear is set (SDM Vol.1
+      // 8.1.3.3: ES summarises the unmasked exception flags; B reflects ES).
+      Ref Pending = _And(OpSize::i64Bit, FSW, Constant(Unmasked));
+      Ref Any = _Lshr(OpSize::i64Bit, _Or(OpSize::i64Bit, Pending, _Neg(OpSize::i64Bit, Pending)), Constant(63));
+      FSW = _Orlshl(OpSize::i64Bit, _Orlshl(OpSize::i64Bit, FSW, Any, 7), Any, 15);
+    }
   }
 
   return FSW;

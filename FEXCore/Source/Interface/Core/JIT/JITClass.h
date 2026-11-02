@@ -560,6 +560,12 @@ private:
   // natemu (fexc), profile slice1 (I6): x87 floating-point ops: FPSR into the x87 exception word, the x87 FPCR (shim/fexc_sites.inc).
   bool FexcX87Op(const IR::IROp_Header* IROp);
   void FexcX87Begin();
+  // natemu (fexc), profile slice1 (I5c): the #MF check of a waiting instruction and the exact-tiny underflow test (shim/fexc_sites.inc).
+  void FexcPendingCheck();
+  void FexcTinyCheck(const IR::IROp_Header* IROp, IR::Ref Node);
+  void FexcTinyLanes(ARMEmitter::VRegister R, uint32_t Elem, uint32_t Lanes, uint64_t Unmasked, uint32_t First = 0);
+  void FexcSimdCheckWords(uint32_t Mask);
+  void FexcSimdStep(ARMEmitter::VRegister R);
   void FexcX87End();
   // natemu (fexc), profile slice1 (I6b): PCMPxSTRx's intermediate result by the resident's `svc #STRING` (shim/fexc_sites.inc).
   void FexcStringSvc(const IR::IROp_Header* IROp, IR::Ref Node);

@@ -1215,6 +1215,7 @@ DEF_OP(VFAddV) {
     // ASIMD doesn't support faddv, need to use multiple faddp to match behaviour.
     if (ElementSize == IR::OpSize::i32Bit) {
       faddp(SubRegSize.Vector, Dst.Q(), Vector.Q(), Vector.Q());
+      if (fexc_slice1) FexcSimdStep(Dst);   // natemu slice1 (I5c): DPPS's first add level has its own exception check
       faddp(SubRegSize.Scalar, Dst, Dst);
     } else {
       faddp(SubRegSize.Scalar, Dst, Vector);

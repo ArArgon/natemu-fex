@@ -644,7 +644,7 @@ void ConstrainedRAPass::Run(IREmitter* IREmit_) {
           }
         }
 
-        if (fexc_slice1 && (FexcPrecision::GuestMemOp(IROp->Op) || IROp->Op == OP_GUESTOPCODE)) {
+        if (fexc_slice1 && (FexcPrecision::GuestMemOp(IROp->Op) || FexcPrecision::CheckOp(IROp->Op) || IROp->Op == OP_GUESTOPCODE)) {
           if (FexcPrecision::LoadsInto(IROp->Op)) {
             PreferredReg[IR->GetID(CodeNode).Value] = PhysicalRegister::Invalid();
           }
