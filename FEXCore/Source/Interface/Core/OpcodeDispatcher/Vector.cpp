@@ -2816,7 +2816,9 @@ void OpDispatchBuilder::XMM_To_MMX_Vector_CVT_Float_To_Int(OpcodeArgs, IR::OpSiz
   // If loading a vector, use the full size, so we don't
   // unnecessarily zero extend the vector. Otherwise, if
   // memory, then we want to load the element size exactly.
-  const auto SrcSize = Op->Src[0].IsGPR() ? OpSize::i128Bit : OpSizeFromSrc(Op);
+  // natemu slice1 (I5c review, I9): CVT(T)PS2PI mm, xmm converts xmm's low two floats only; converting all four raised the
+  // upper two's MXCSR flags (and a spurious #XM when unmasked). CVT(T)PD2PI's two doubles fill the register.
+  const auto SrcSize = Op->Src[0].IsGPR() ? (fexc_slice1 && SrcElementSize == OpSize::i32Bit ? OpSize::i64Bit : OpSize::i128Bit) : OpSizeFromSrc(Op);
   const auto DstSize = OpSizeFromDst(Op);
   Ref Src = LoadSourceFPR_WithOpSize(Op, Op->Src[0], SrcSize, Op->Flags);
   Ref Result = Vector_CVT_Float_To_Int32Impl(Op, DstSize, Src, SrcSize, SrcElementSize, HostRoundingMode, false /* TODO? */);

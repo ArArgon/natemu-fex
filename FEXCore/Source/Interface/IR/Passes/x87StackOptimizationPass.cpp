@@ -247,10 +247,13 @@ private:
       if (fexc_slice1 && Op->StoreSize == OpSize::i64Bit) StackNode = QuietSNaN(StackNode);   // natemu slice1 (I6)
       if (fexc_slice1 && Op->StoreSize == OpSize::i64Bit && (fexc_x87_unmasked & 16)) {
         // natemu slice1 (I5c): a nonzero double denormal stored to m64 is tiny (exact): x86's unmasked UE (SDM Vol.1 8.5.5).
+        // natemu slice1 (I5c review): tiny = the magnitude H = Bits << 1 is nonzero and its exponent field H >> 53 is zero (DBL_MIN
+        // is not tiny), flag-free: ((H >> 53) - 1) >> 63 and (H | -H) >> 63.
         Ref Bits = IREmit->_VExtractToGPR(OpSize::i64Bit, OpSize::i64Bit, StackNode, 0);
-        Ref Hi = IREmit->_Lshr(OpSize::i64Bit, IREmit->_Sub(OpSize::i64Bit, IREmit->_Lshl(OpSize::i64Bit, Bits, GetConstant(1)), GetConstant(1)),
-                               GetConstant(53));
-        Tiny = IREmit->_Lshr(OpSize::i64Bit, IREmit->_Sub(OpSize::i64Bit, Hi, GetConstant(1)), GetConstant(63));
+        Ref H = IREmit->_Lshl(OpSize::i64Bit, Bits, GetConstant(1));
+        Ref ExpZero = IREmit->_Lshr(OpSize::i64Bit, IREmit->_Sub(OpSize::i64Bit, IREmit->_Lshr(OpSize::i64Bit, H, GetConstant(53)), GetConstant(1)), GetConstant(63));
+        Ref NonZero = IREmit->_Lshr(OpSize::i64Bit, IREmit->_Or(OpSize::i64Bit, H, IREmit->_Neg(OpSize::i64Bit, H)), GetConstant(63));
+        Tiny = IREmit->_And(OpSize::i64Bit, ExpZero, NonZero);
       }
       IREmit->_StoreMemFPR(Op->StoreSize, StackNode, AddrNode, Offset, Align, OffsetType, OffsetScale);
       break;
