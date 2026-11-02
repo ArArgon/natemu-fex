@@ -406,6 +406,11 @@ void OpDispatchBuilder::AVXVectorScalarUnaryInsertALUOp(OpcodeArgs, IROps IROp, 
 }
 
 void OpDispatchBuilder::InsertMMX_To_XMM_Vector_CVT_Int_To_Float(OpcodeArgs) {
+  // natemu slice1 (I9 addendum): CVTPI2PS makes the x87-to-MMX transition (TOP = 0, every tag valid) with a memory source too
+  // (SDM CVTPI2PS: no operand exception; CVTPI2PD xmm, m64 is the form that does not); the register source made it already.
+  if (fexc_slice1 && MMXState == MMXState_X87) {
+    ChgStateX87_MMX();
+  }
   // We load the full vector width when dealing with a source vector,
   // so that we don't do any unnecessary zero extension to the scalar
   // element that we're going to operate on.
