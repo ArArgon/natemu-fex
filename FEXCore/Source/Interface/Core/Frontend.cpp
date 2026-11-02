@@ -408,7 +408,14 @@ Decoder::DecodedBlockStatus Decoder::NormalOp(const FEXCore::X86Tables::X86InstI
   const bool HasWideningDisplacement =
     (FEXCore::X86Tables::DecodeFlags::GetOpAddr(DecodeInst->Flags, 0) & FEXCore::X86Tables::DecodeFlags::FLAG_WIDENING_SIZE_LAST) != 0 ||
     (Options.w && BlockInfo.Is64BitMode);
+  // natemu slice1: Intel ignores 66 on a near direct branch in 64-bit mode (Jcc rel8/rel32, JMP rel8/rel32, CALL rel32,
+  // LOOPcc, JrCXZ: the operand size is forced to 64 bits, the displacement stays rel8/rel32; SDM Vol.2 CALL, JMP, Jcc,
+  // Appendix A "f64"). FEX narrowed it as AMD does (rel16, 16-bit operand size).
+  const bool FexcNearDirect = fexc_slice1 && BlockInfo.Is64BitMode && (Info->Flags & FEXCore::X86Tables::InstFlags::FLAGS_SETS_RIP) &&
+                              (Info->Flags & FEXCore::X86Tables::InstFlags::FLAGS_SRC_SEXT) && !(Info->Flags & FEXCore::X86Tables::InstFlags::FLAGS_MODRM) &&
+                              FEXCore::X86Tables::InstFlags::GetSizeDstFlags(Info->Flags) == FEXCore::X86Tables::InstFlags::SIZE_64BITDEF;
   const bool HasNarrowingDisplacement =
+    !FexcNearDirect &&
     (FEXCore::X86Tables::DecodeFlags::GetOpAddr(DecodeInst->Flags, 0) & FEXCore::X86Tables::DecodeFlags::FLAG_OPERAND_SIZE_LAST) != 0;
 
   const bool HasXMMFlags = (Info->Flags & InstFlags::FLAGS_XMM_FLAGS) != 0;
