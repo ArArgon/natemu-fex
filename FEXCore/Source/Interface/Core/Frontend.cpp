@@ -936,7 +936,15 @@ Decoder::DecodedBlockStatus Decoder::DecodeInstructionImpl(uint64_t PC) {
           Prefix |= PF_38_F3;
         }
 
-        uint16_t LocalOp = (Prefix << 8) | ReadByte();
+        const uint8_t Op38 = ReadByte();
+        // natemu: ADOX (F3 0F 38 F6) with a 66 prefix too, in either order, runs as ADOX with 66 ignored on the reference AMD
+        // machine (owner rule: an encoding the SDM leaves open follows that machine); F2 with it stays undecoded.
+        if (Op38 == 0xF6 && Prefix == (PF_38_66 | PF_38_F3)) {
+          Prefix = PF_38_F3;
+          DecodeInst->Flags &= ~DecodeFlags::FLAG_OPERAND_SIZE;
+          DecodeFlags::PopOpAddrIf(&DecodeInst->Flags, DecodeFlags::FLAG_OPERAND_SIZE_LAST);
+        }
+        uint16_t LocalOp = (Prefix << 8) | Op38;
 
         bool NoOverlay66 = (FEXCore::X86Tables::H0F38TableOps[LocalOp].Flags & InstFlags::FLAGS_NO_OVERLAY66) != 0;
         if (LastEscapePrefix == 0x66 && NoOverlay66) { // Operand Size
