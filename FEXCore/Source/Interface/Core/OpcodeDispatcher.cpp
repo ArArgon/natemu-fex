@@ -5363,6 +5363,36 @@ void OpDispatchBuilder::UnimplementedOp(OpcodeArgs) {
               });
 }
 
+// natemu slice1 (perf chunk 15): CLI and STI translated inline, only where the allowlist lets them through (fexc_slice1.inc
+// `Cut`: a CPL-0 request, the one-byte forms; STI never first or last in its block). At CPL 0 neither can fault (CPL <= IOPL).
+// CLI stores IF = 0 in its flag byte, which the resident banks at every exit and fault. STI first reads the resident's
+// event-pending byte (FEXC_EVENT_PENDING_LOC: an interrupt would be taken were IF set, written at every entry into generated
+// code and after every doorbell): when set, the block exits to the STI's own RIP, where the resident runs it as its
+// transaction (the STI shadow and the delivery after the next instruction are its); else it stores IF = 1. The instruction
+// after an inline STI is always in the same block, so the boundary the shadow covers is never a block boundary.
+void OpDispatchBuilder::FexcInterruptFlagOp(OpcodeArgs) {
+  if (!fexc_slice1) {
+    return PermissionRestrictedOp(Op);
+  }
+  const auto IF = offsetof(Core::CPUState, flags[X86State::RFLAG_IF_LOC]);
+  if (Op->OP == 0xFA) {
+    _StoreContextGPR(OpSize::i8Bit, Constant(0), IF);
+    return;
+  }
+  auto Pending = _LoadContextGPR(OpSize::i8Bit, offsetof(Core::CPUState, flags[FEXC_EVENT_PENDING_LOC]));
+  auto Held = CondJump(Pending, CondClass::NEQ);
+  auto Exit = CreateNewCodeBlockAfter(GetCurrentBlock());
+  SetTrueJumpTarget(Held, Exit);
+  SetCurrentCodeBlock(Exit);
+  StartNewBlock();
+  ExitRelocatedPC(Op, -int64_t(Op->InstSize));
+  auto Next = CreateNewCodeBlockAfter(GetCurrentBlock());
+  SetFalseJumpTarget(Held, Next);
+  SetCurrentCodeBlock(Next);
+  StartNewBlock();
+  _StoreContextGPR(OpSize::i8Bit, Constant(1), IF);
+}
+
 void OpDispatchBuilder::PermissionRestrictedOp(OpcodeArgs) {
   BreakOp(Op, FEXCore::IR::BreakDefinition {
                 .ErrorRegister = 0,

@@ -415,6 +415,7 @@ public:
   void LAHFOp(OpcodeArgs);
   void MOVSegOp(OpcodeArgs, bool ToSeg);
   void FLAGControlOp(OpcodeArgs);
+  void FexcInterruptFlagOp(OpcodeArgs);
   void MOVOffsetOp(OpcodeArgs);
   void CMOVOp(OpcodeArgs);
   void CPUIDOp(OpcodeArgs);

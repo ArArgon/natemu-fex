@@ -82,7 +82,7 @@ constexpr inline DispatchTableEntry OpDispatch_BaseOpTable[] = {
 
   {0xF5, 1, &OpDispatchBuilder::FLAGControlOp},
   {0xF8, 2, &OpDispatchBuilder::FLAGControlOp},
-  {0xFA, 2, &OpDispatchBuilder::PermissionRestrictedOp},
+  {0xFA, 2, &OpDispatchBuilder::FexcInterruptFlagOp},
   {0xFC, 2, &OpDispatchBuilder::FLAGControlOp},
 };
 } // namespace FEXCore::IR

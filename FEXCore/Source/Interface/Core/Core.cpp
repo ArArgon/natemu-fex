@@ -613,7 +613,8 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
         TableInfo = Block.DecodedInstructions[i].TableInfo;
         DecodedInfo = &Block.DecodedInstructions[i];
 
-        if (fexc_slice1 && FexcSlice1::Cut(Block.BlockStatus, i + 1 == InstsInBlock, BlockInstructionsLength == 0, *DecodedInfo, InstAddress)) {
+        if (fexc_slice1 && FexcSlice1::Cut(Block.BlockStatus, i + 1 == InstsInBlock, BlockInstructionsLength == 0, *DecodedInfo, InstAddress,
+                                             i + 1 < InstsInBlock ? &Block.DecodedInstructions[i + 1] : nullptr, i + 2 == InstsInBlock)) {
           if (!BlockInstructionsLength) {
             Thread->OpDispatcher->DelayedDisownBuffer();
             return {std::nullopt, 0, 0, 0, 0};
