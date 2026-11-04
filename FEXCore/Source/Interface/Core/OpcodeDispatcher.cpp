@@ -3178,6 +3178,24 @@ OpDispatchBuilder::CycleCounterPair OpDispatchBuilder::CycleCounter(bool SelfSyn
 }
 
 void OpDispatchBuilder::RDTSCOp(OpcodeArgs) {
+  // natemu slice1 (perf chunk 15): RDTSC inline, only where the allowlist lets it through (fexc_slice1.inc `Cut`: a CPL-0
+  // request whose counter runs at 24 MHz, the two-byte form; at CPL 0 CR4.TSD does not apply, so it never faults). The
+  // resident's TSC exactly (`natemu_abi::clock::tsc` plus the vCPU's offset): floor(V x 125 / 3) for the virtual count V
+  // (1 GHz from 24 MHz), written as 125a + 41r + (r >> 1) with V = 3a + r (a by the multiply-high reciprocal of 3, exact for
+  // every 64-bit V), modulo 2^64, plus the offset the resident keeps in the guest-state page (FEX's `_pad1`). EDX:EAX, the
+  // upper halves of RAX and RDX zero. The count read is self-synchronising (CNTVCTSS with FEAT_ECV, else ISB; CNTVCT).
+  if (fexc_slice1) {
+    static_assert(offsetof(Core::CPUState, _pad1) == FEXC_TSC_OFFSET);
+    auto V = _CycleCounter(true);
+    auto A = _Lshr(OpSize::i64Bit, _UMulH(OpSize::i64Bit, V, Constant(0xAAAA'AAAA'AAAA'AAABull)), Constant(1));
+    auto R = _Sub(OpSize::i64Bit, V, _Mul(OpSize::i64Bit, A, Constant(3)));
+    auto Low = _Add(OpSize::i64Bit, _Mul(OpSize::i64Bit, R, Constant(41)), _Lshr(OpSize::i64Bit, R, Constant(1)));
+    auto T = _Add(OpSize::i64Bit, _Add(OpSize::i64Bit, _Mul(OpSize::i64Bit, A, Constant(125)), Low),
+                  _LoadContextGPR(OpSize::i64Bit, FEXC_TSC_OFFSET));
+    StoreGPRRegister(X86State::REG_RAX, _Bfe(OpSize::i64Bit, 32, 0, T));
+    StoreGPRRegister(X86State::REG_RDX, _Lshr(OpSize::i64Bit, T, Constant(32)));
+    return;
+  }
   auto Counter = CycleCounter(false);
   StoreGPRRegister(X86State::REG_RAX, Counter.CounterLow);
   StoreGPRRegister(X86State::REG_RDX, Counter.CounterHigh);
