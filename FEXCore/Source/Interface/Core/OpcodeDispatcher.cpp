@@ -5411,6 +5411,22 @@ void OpDispatchBuilder::FexcInterruptFlagOp(OpcodeArgs) {
   _StoreContextGPR(OpSize::i8Bit, Constant(1), IF);
 }
 
+// natemu slice1 (perf chunk 17): SWAPGS translated inline, only where the allowlist lets it through (fexc_slice1.inc : a
+// CPL-0 request, the plain three-byte form 0f 01 f8). At CPL 0 it cannot fault (#GP(0) needs CPL > 0; LOCK, the only #UD,
+// is a prefix). It exchanges GS.base (FEX's gs_cached, which every GS-prefixed access adds) with IA32_KERNEL_GS_BASE, which
+// the resident keeps in FEXC_KERNEL_GS_BASE (FEX's State.L1Pointer, which no generated code uses) while a CPL-0 block runs,
+// writing both at every entry and banking both back after every CPL-0 exit and fault.
+void OpDispatchBuilder::FexcSwapGSOp(OpcodeArgs) {
+  if (!fexc_slice1) {
+    return PermissionRestrictedOp(Op);
+  }
+  static_assert(offsetof(Core::CPUState, L1Pointer) == FEXC_KERNEL_GS_BASE);
+  auto GS = _LoadContextGPR(OpSize::i64Bit, offsetof(Core::CPUState, gs_cached));
+  auto Kernel = _LoadContextGPR(OpSize::i64Bit, FEXC_KERNEL_GS_BASE);
+  _StoreContextGPR(OpSize::i64Bit, Kernel, offsetof(Core::CPUState, gs_cached));
+  _StoreContextGPR(OpSize::i64Bit, GS, FEXC_KERNEL_GS_BASE);
+}
+
 void OpDispatchBuilder::PermissionRestrictedOp(OpcodeArgs) {
   BreakOp(Op, FEXCore::IR::BreakDefinition {
                 .ErrorRegister = 0,
