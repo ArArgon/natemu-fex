@@ -463,6 +463,7 @@ public:
   CycleCounterPair CycleCounter(bool SelfSynchronizingLoads);
   void RDTSCOp(OpcodeArgs);
   void FexcMovFromCROp(OpcodeArgs);   // natemu slice1 (perf chunk 26)
+  void FexcVerwOp(OpcodeArgs);        // natemu slice1 (perf P2)
   void INCOp(OpcodeArgs);
   void DECOp(OpcodeArgs);
   void NEGOp(OpcodeArgs);

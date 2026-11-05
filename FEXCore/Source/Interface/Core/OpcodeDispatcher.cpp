@@ -5466,6 +5466,60 @@ void OpDispatchBuilder::FexcMovFromCROp(OpcodeArgs) {
   StoreResultGPR_WithOpSize(Op, Op->Src[0], _LoadContextGPR(OpSize::i64Bit, FEXC_CR2), OpSize::i64Bit);
 }
 
+// natemu slice1 (perf P2): VERW m16 translated inline, only where the allowlist lets it through (fexc_slice1.inc: a CPL-0
+// request, 0f 00 /5 with a memory operand and no prefix but a REX, never its block's first instruction). Only the outcome
+// ZF = 1 is computed here, for a GDT selector; every other case exits to the VERW's own RIP, where the resident runs it as
+// its transaction (a block never starts with a translated VERW, so that RIP is a system cut). The resident writes, at every
+// entry into a CPL-0 block, the GDT base at FEXC_VERW_GDT_BASE and, at FEXC_VERW_GDT_LIMIT, L = the limit less 7 (the offset
+// of the last whole descriptor) when the table's base is 8-aligned and [base, base + limit] canonical, else 0 (FEX's
+// segment_arrays, which no 64-bit code uses). With CPL 0, SDM Vol.2 VERR/VERW gives ZF = 1 for a selector whose descriptor
+// lies inside the table and is a writable data segment (S = 1, type bit 3 = 0, bit 1 = 1) with DPL >= RPL (data is never
+// conforming; DPL >= CPL holds). One block (FEX keeps no value across a branch): the selector is read (an ordinary guest
+// load: its faults are the m16 operand's), in-table means TI = 0 and 1 <= index * 8 <= L (index * 8 - 1 compared unsigned
+// with L: the null selector wraps); the descriptor is read at base + index * 8 when in-table, else at the operand's own
+// 8-byte group (read already: same page, no fault; the value is dropped), an ordinary guest load as the implicit
+// supervisor read is at CPL 0, inside one page; the exit is taken unless in-table, (descriptor >> 41) & 0b1101 == 0b1001 and
+// DPL >= RPL; then ZF = 1. No other flag or register changes, and nothing before an exit. The register form stays the
+// resident's: it has no operand address to read from instead.
+void OpDispatchBuilder::FexcVerwOp(OpcodeArgs) {
+  const auto Prefixes = FEXCore::X86Tables::DecodeFlags::FLAG_OPERAND_SIZE | FEXCore::X86Tables::DecodeFlags::FLAG_ADDRESS_SIZE |
+                        FEXCore::X86Tables::DecodeFlags::FLAG_LOCK | FEXCore::X86Tables::DecodeFlags::FLAG_REP_PREFIX |
+                        FEXCore::X86Tables::DecodeFlags::FLAG_REPNE_PREFIX | FEXCore::X86Tables::DecodeFlags::FLAG_SEGMENTS;
+  if (!fexc_slice1 || !fexc_cpl0 || ((Op->ModRM >> 3) & 7) != 5 || (Op->ModRM >> 6) == 3 || Op->Src[0].IsGPR() || (Op->Flags & Prefixes)) {
+    return PermissionRestrictedOp(Op);
+  }
+  static_assert(offsetof(Core::CPUState, segment_arrays[0]) == FEXC_VERW_GDT_BASE);
+  static_assert(offsetof(Core::CPUState, segment_arrays[1]) == FEXC_VERW_GDT_LIMIT);
+  // Ordered for few live values (the code shape admits no spill).
+  Ref Address = LoadSourceGPR_WithOpSize(Op, Op->Src[0], OpSize::i16Bit, Op->Flags, {.LoadData = false});
+  Ref Selector = _LoadMemGPRAutoTSO(OpSize::i16Bit, Address, OpSize::i8Bit);
+  Ref Fallback = _And(OpSize::i64Bit, Address, Constant(~uint64_t(7)));
+  Ref Offset = _And(OpSize::i64Bit, Selector, Constant(0xfff8));
+  Ref Inside = _Select(OpSize::i64Bit, OpSize::i64Bit, CondClass::ULT, _Sub(OpSize::i64Bit, Offset, Constant(1)),
+                       _LoadContextGPR(OpSize::i64Bit, FEXC_VERW_GDT_LIMIT),
+                       _Add(OpSize::i64Bit, _LoadContextGPR(OpSize::i64Bit, FEXC_VERW_GDT_BASE), Offset), Fallback);
+  Ref At = _Select(OpSize::i64Bit, OpSize::i64Bit, CondClass::EQ, _And(OpSize::i64Bit, Selector, Constant(4)), Constant(0), Inside, Fallback);
+  Ref Descriptor = _LoadMemGPRAutoTSO(OpSize::i64Bit, At, OpSize::i8Bit);
+  // Read at the fallback (outside the table, or TI = 1): taken as 0, which no test accepts. (A descriptor slot at the
+  // operand's own group is taken so too: an exit, which is always exact.)
+  Ref Valid = _Select(OpSize::i64Bit, OpSize::i64Bit, CondClass::EQ, At, Fallback, Constant(0), Descriptor);
+  // Type bits 44:41 (S, code, E, W) with E ignored: 1011b iff a writable data segment, so Wrong = 0 then.
+  Ref Wrong = _Sub(OpSize::i64Bit, _Or(OpSize::i64Bit, _Bfe(OpSize::i64Bit, 4, 41, Valid), Constant(2)), Constant(11));
+  Ref Bad = _Select(OpSize::i64Bit, OpSize::i64Bit, CondClass::UGE, _Bfe(OpSize::i64Bit, 2, 45, Valid), _And(OpSize::i64Bit, Selector, Constant(3)),
+                    Wrong, Constant(1));
+  auto Decide = CondJump(Bad, CondClass::NEQ);
+  auto Exit = CreateNewCodeBlockAfter(GetCurrentBlock());
+  SetTrueJumpTarget(Decide, Exit);
+  SetCurrentCodeBlock(Exit);
+  StartNewBlock();
+  ExitRelocatedPC(Op, -int64_t(Op->InstSize));
+  auto Next = CreateNewCodeBlockAfter(GetCurrentBlock());
+  SetFalseJumpTarget(Decide, Next);
+  SetCurrentCodeBlock(Next);
+  StartNewBlock();
+  SetRFLAG<FEXCore::X86State::RFLAG_ZF_RAW_LOC>(Constant(1));
+}
+
 void OpDispatchBuilder::PermissionRestrictedOp(OpcodeArgs) {
   BreakOp(Op, FEXCore::IR::BreakDefinition {
                 .ErrorRegister = 0,

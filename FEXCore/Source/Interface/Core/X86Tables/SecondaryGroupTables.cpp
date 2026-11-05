@@ -66,7 +66,8 @@ constexpr std::array<X86InstInfo, MAX_INST_SECOND_GROUP_TABLE_SIZE> SecondInstGr
     {OPD(TYPE_GROUP_6, PF_NONE, 2), 1, X86InstInfo{"LLDT",  TYPE_PRIV, FLAGS_NONE,       0}},
     {OPD(TYPE_GROUP_6, PF_NONE, 3), 1, X86InstInfo{"LTR",   TYPE_INST, FLAGS_NONE,       0}},
     {OPD(TYPE_GROUP_6, PF_NONE, 4), 1, X86InstInfo{"VERR",  TYPE_UNDEC, FLAGS_MODRM, 0}},
-    {OPD(TYPE_GROUP_6, PF_NONE, 5), 1, X86InstInfo{"VERW",  TYPE_UNDEC, FLAGS_MODRM, 0}},
+    // natemu (perf P2): VERW r/m16 without a prefix is decoded (FexcVerwOp translates it under slice1 at CPL 0).
+    {OPD(TYPE_GROUP_6, PF_NONE, 5), 1, X86InstInfo{"VERW",  TYPE_INST, FLAGS_MODRM, 0}},
     {OPD(TYPE_GROUP_6, PF_NONE, 6), 1, X86InstInfo{"",      TYPE_INVALID, FLAGS_NONE,    0}},
     {OPD(TYPE_GROUP_6, PF_NONE, 7), 1, X86InstInfo{"",      TYPE_INVALID, FLAGS_NONE,    0}},
 
