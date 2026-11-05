@@ -5382,12 +5382,14 @@ void OpDispatchBuilder::UnimplementedOp(OpcodeArgs) {
 }
 
 // natemu slice1 (perf chunk 15): CLI and STI translated inline, only where the allowlist lets them through (fexc_slice1.inc
-// `Cut`: a CPL-0 request, the one-byte forms; STI never first or last in its block). At CPL 0 neither can fault (CPL <= IOPL).
+// `Cut`: a CPL-0 request, the one-byte forms; STI never last in its block). At CPL 0 neither can fault (CPL <= IOPL).
 // CLI stores IF = 0 in its flag byte, which the resident banks at every exit and fault. STI first reads the resident's
 // event-pending byte (FEXC_EVENT_PENDING_LOC: an interrupt would be taken were IF set, written at every entry into generated
 // code and after every doorbell): when set, the block exits to the STI's own RIP, where the resident runs it as its
 // transaction (the STI shadow and the delivery after the next instruction are its); else it stores IF = 1. The instruction
-// after an inline STI is always in the same block, so the boundary the shadow covers is never a block boundary.
+// after an inline STI is always in the same block, so the boundary the shadow covers is never a block boundary. An STI may
+// be its block's first instruction (perf chunk 25): its exit then goes to the block's own start, which the resident never
+// links and where it runs the STI itself.
 void OpDispatchBuilder::FexcInterruptFlagOp(OpcodeArgs) {
   if (!fexc_slice1) {
     return PermissionRestrictedOp(Op);
