@@ -81,7 +81,9 @@ constexpr std::array<X86InstInfo, MAX_SECOND_TABLE_SIZE> SecondBaseOps = []() co
     {0x18, 1, X86InstInfo{"",           TYPE_GROUP_16, FLAGS_NO_OVERLAY,                                                                                      0}},
     {0x19, 7, X86InstInfo{"NOP",        TYPE_INST, FLAGS_MODRM | FLAGS_NO_OVERLAY,                                                                                     0}},
 
-    {0x20, 2, X86InstInfo{"MOV",        TYPE_INST, GenFlagsSameSize(SIZE_64BIT) | FLAGS_NO_OVERLAY,                                                     0}},
+    // natemu (perf chunk 26): MOV r64, CRn has a ModRM (its register in rm; FexcMovFromCROp translates MOV r64, CR2 under slice1).
+    {0x20, 1, X86InstInfo{"MOV",        TYPE_INST, GenFlagsSameSize(SIZE_64BIT) | FLAGS_MODRM | FLAGS_NO_OVERLAY,                                       0}},
+    {0x21, 1, X86InstInfo{"MOV",        TYPE_INST, GenFlagsSameSize(SIZE_64BIT) | FLAGS_NO_OVERLAY,                                                     0}},
     {0x22, 2, X86InstInfo{"MOV",        TYPE_INST, GenFlagsSameSize(SIZE_64BIT) | FLAGS_NO_OVERLAY,                                                     0}},
     {0x24, 4, X86InstInfo{"",           TYPE_INVALID, FLAGS_NONE,                                                                                       0}},
     {0x28, 1, X86InstInfo{"MOVAPS",     TYPE_INST, GenFlagsSameSize(SIZE_128BIT) | FLAGS_MODRM | FLAGS_XMM_FLAGS,                                                 0}},

@@ -12,7 +12,8 @@ constexpr DispatchTableEntry OpDispatch_TwoByteOpTable[] = {
 
   {0x19, 7, &OpDispatchBuilder::NOPOp}, // NOP with ModRM
 
-  {0x20, 4, &OpDispatchBuilder::PermissionRestrictedOp},
+  {0x20, 1, &OpDispatchBuilder::FexcMovFromCROp},
+  {0x21, 3, &OpDispatchBuilder::PermissionRestrictedOp},
 
   {0x30, 1, &OpDispatchBuilder::PermissionRestrictedOp},
   {0x31, 1, &OpDispatchBuilder::RDTSCOp},

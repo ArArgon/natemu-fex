@@ -5452,6 +5452,18 @@ void OpDispatchBuilder::FexcSwapGSOp(OpcodeArgs) {
   _StoreContextGPR(OpSize::i64Bit, GS, FEXC_KERNEL_GS_BASE);
 }
 
+// natemu slice1 (perf chunk 26): MOV r64, CR2 translated inline, only where the allowlist lets it through (fexc_slice1.inc: a
+// CPL-0 request, 0f 20 with ModRM reg 2 and mod 11, no prefix but a REX without R). At CPL 0 it cannot fault. CR2 is in
+// FEXC_CR2 (FEX's State.L1Mask, which no generated code uses), written by the resident at every entry into a CPL-0 block
+// (only the resident changes CR2: a #PF delivery or MOV to CR2, each followed by an entry). The register is ModRM.rm.
+void OpDispatchBuilder::FexcMovFromCROp(OpcodeArgs) {
+  if (!fexc_slice1) {
+    return PermissionRestrictedOp(Op);
+  }
+  static_assert(offsetof(Core::CPUState, L1Mask) == FEXC_CR2);
+  StoreResultGPR_WithOpSize(Op, Op->Src[0], _LoadContextGPR(OpSize::i64Bit, FEXC_CR2), OpSize::i64Bit);
+}
+
 void OpDispatchBuilder::PermissionRestrictedOp(OpcodeArgs) {
   BreakOp(Op, FEXCore::IR::BreakDefinition {
                 .ErrorRegister = 0,
