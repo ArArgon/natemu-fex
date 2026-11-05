@@ -3303,6 +3303,17 @@ void OpDispatchBuilder::FexcStringOp(OpcodeArgs, FexcString Kind) {
   auto Reg = [&](uint32_t R) { return LoadGPRRegister(R, A32 ? OpSize::i32Bit : OpSize::iInvalid); };
   auto Put = [&](uint32_t R, Ref V) { StoreGPRRegister(R, A32 ? _Bfe(OpSize::i64Bit, 32, 0, V) : V); };
 
+  // natemu slice1 (perf chunk 26): with `--bulk` (the host's request for a block that is not a single-instruction step and
+  // runs without alignment checking or data breakpoints), REP STOS in 64-bit addressing first stores the part of the string
+  // that fits in RDI's page in bulk (`FexcRepStos`, which leaves RCX and RDI at an iteration boundary after each store); the
+  // pass below then goes on from there: RCX = 0 ends the instruction, else one element and, if RCX is then 0, the
+  // instruction's end (a forward branch: the bulk part usually leaves at most that element, and an exit to its own RIP
+  // with RCX = 0 is a boundary past the instruction, which the resident never links), else the exit to its own RIP.
+  const bool Bulk = Repeat && Kind == FexcString::STOS && Is64BitMode && !A32 && fexc_bulk;
+  if (Bulk) {
+    _FexcRepStos(uint8_t(Bytes));
+  }
+
   IRPair<IROp_CondJump> Done;
   if (Repeat) {
     Done = A32 ? CondJump(LoadGPRRegister(X86State::REG_RCX), Constant(0), Invalid(), Invalid(), CondClass::EQ, OpSize::i32Bit) :
@@ -3349,6 +3360,15 @@ void OpDispatchBuilder::FexcStringOp(OpcodeArgs, FexcString Kind) {
   }
   Put(X86State::REG_RCX, Sub(OpSize::i64Bit, LoadGPRRegister(X86State::REG_RCX), 1));
 
+  IRPair<IROp_CondJump> Last;
+  if (Bulk) {
+    Last = CondJump(LoadGPRRegister(X86State::REG_RCX), CondClass::EQ);
+    auto More = CreateNewCodeBlockAfter(GetCurrentBlock());
+    SetFalseJumpTarget(Last, More);
+    SetCurrentCodeBlock(More);
+    StartNewBlock();
+  }
+
   IRPair<IROp_Jump> Stopped;
   if (Compare) {
     // REPE (F3) repeats while ZF = 1, REPNE (F2) while ZF = 0.
@@ -3369,6 +3389,9 @@ void OpDispatchBuilder::FexcStringOp(OpcodeArgs, FexcString Kind) {
   }
   auto Next = CreateNewCodeBlockAfter(GetCurrentBlock());
   SetTrueJumpTarget(Done, Next);
+  if (Bulk) {
+    SetTrueJumpTarget(Last, Next);
+  }
   if (Compare) {
     SetJumpTarget(Stopped, Next);
   }

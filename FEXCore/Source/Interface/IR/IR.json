@@ -2917,6 +2917,15 @@
         "DestSize": "OpSize::i32Bit",
         "HasSideEffects": true
       },
+      "FexcRepStos u8:$Width": {
+        "Desc": ["natemu slice1 (perf chunk 26): the part of a REP STOS of $Width-byte elements (64-bit addressing, DF = 0) that",
+                 "fits in RDI's page, in 16-byte stores of AL/AX/EAX/RAX repeated, RCX and RDI updated after each store, so a",
+                 "fault or a watchpoint at a store finds the registers of an iteration boundary; nothing when DF = 1, RDI is not",
+                 "8-aligned ($Width > 1) or RCX holds fewer than 16 / $Width elements. Writes RCX and RDI's static registers",
+                 "(no IR value: the dispatcher reads them after it). Its JIT form is natemu's (fexc_sites.inc)"
+                ],
+        "HasSideEffects": true
+      },
       "FexcX87Svc u8:$Function": {
         "Desc": ["natemu slice1 (I6b): the x87 instruction D9 $Function (F2XM1 FYL2X FPTAN FPATAN FXTRACT FPREM1 FPREM FYL2XP1",
                  "FSINCOS FSCALE FSIN FCOS) run whole by the resident on the x87 state in the guest-state page (svc #X87)"
