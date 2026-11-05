@@ -82,7 +82,10 @@ constexpr std::array<X86InstInfo, MAX_SECOND_TABLE_SIZE> SecondBaseOps = []() co
     {0x19, 7, X86InstInfo{"NOP",        TYPE_INST, FLAGS_MODRM | FLAGS_NO_OVERLAY,                                                                                     0}},
 
     // natemu (perf chunk 26): MOV r64, CRn has a ModRM (its register in rm; FexcMovFromCROp translates MOV r64, CR2 under slice1).
-    {0x20, 1, X86InstInfo{"MOV",        TYPE_INST, GenFlagsSameSize(SIZE_64BIT) | FLAGS_MODRM | FLAGS_NO_OVERLAY,                                       0}},
+    // The hardware ignores the mod field (SDM Vol.2 MOV: Move to/from Control Registers): the instruction is 3 bytes whatever
+    // it is, so a mod other than 11 must not read a SIB or displacement: such a form is not decoded (the allowlist's cut,
+    // which the host decodes itself).
+    {0x20, 1, X86InstInfo{"MOV",        TYPE_INST, GenFlagsSameSize(SIZE_64BIT) | FLAGS_MODRM | FLAGS_SF_MOD_REG_ONLY | FLAGS_NO_OVERLAY,               0}},
     {0x21, 1, X86InstInfo{"MOV",        TYPE_INST, GenFlagsSameSize(SIZE_64BIT) | FLAGS_NO_OVERLAY,                                                     0}},
     {0x22, 2, X86InstInfo{"MOV",        TYPE_INST, GenFlagsSameSize(SIZE_64BIT) | FLAGS_NO_OVERLAY,                                                     0}},
     {0x24, 4, X86InstInfo{"",           TYPE_INVALID, FLAGS_NONE,                                                                                       0}},

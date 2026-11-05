@@ -5457,7 +5457,9 @@ void OpDispatchBuilder::FexcSwapGSOp(OpcodeArgs) {
 // FEXC_CR2 (FEX's State.L1Mask, which no generated code uses), written by the resident at every entry into a CPL-0 block
 // (only the resident changes CR2: a #PF delivery or MOV to CR2, each followed by an entry). The register is ModRM.rm.
 void OpDispatchBuilder::FexcMovFromCROp(OpcodeArgs) {
-  if (!fexc_slice1) {
+  // Only MOV r64, CR2 (ModRM mod 11, reg 2, no REX.R) of a CPL-0 request, whatever the allowlist let through.
+  const bool Cr2 = (Op->ModRM >> 3) == 0x1A && !(Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_REX_XGPR_R);
+  if (!fexc_slice1 || !Cr2 || !fexc_cpl0) {
     return PermissionRestrictedOp(Op);
   }
   static_assert(offsetof(Core::CPUState, L1Mask) == FEXC_CR2);
