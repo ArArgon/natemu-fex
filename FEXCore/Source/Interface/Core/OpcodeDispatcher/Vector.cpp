@@ -3463,6 +3463,12 @@ void OpDispatchBuilder::LDMXCSR(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::STMXCSR(OpcodeArgs) {
+  // natemu slice1 (perf chunk 25): STMXCSR/VSTMXCSR translated inline (fexc_slice1.inc `Classify`): the stored value carries
+  // the exception flags the block's code raised (FexcMxcsr), as the resident's transaction would store after banking them.
+  if (fexc_slice1) {
+    StoreResultGPR_WithOpSize(Op, Op->Dest, _FexcMxcsr(), OpSize::i32Bit);
+    return;
+  }
   StoreResultGPR_WithOpSize(Op, Op->Dest, GetMXCSR(), OpSize::i32Bit);
 }
 
