@@ -16,6 +16,7 @@ $end_info$
 #include <array>
 #include <algorithm>
 #include <cstring>
+#include <string_view>
 #include <FEXCore/Config/Config.h>
 #include <FEXCore/Core/X86Enums.h>
 #include <FEXCore/HLE/SyscallHandler.h>
@@ -414,8 +415,13 @@ Decoder::DecodedBlockStatus Decoder::NormalOp(const FEXCore::X86Tables::X86InstI
   const bool FexcNearDirect = fexc_slice1 && BlockInfo.Is64BitMode && (Info->Flags & FEXCore::X86Tables::InstFlags::FLAGS_SETS_RIP) &&
                               (Info->Flags & FEXCore::X86Tables::InstFlags::FLAGS_SRC_SEXT) && !(Info->Flags & FEXCore::X86Tables::InstFlags::FLAGS_MODRM) &&
                               FEXCore::X86Tables::InstFlags::GetSizeDstFlags(Info->Flags) == FEXCore::X86Tables::InstFlags::SIZE_64BITDEF;
+  // Intel SDM Vol.1 6.4.7: near CALL/JMP/RET are forced to 64 bits, including indirect targets and stack effects.
+  // Keep address-size overrides: they still select a 32-bit memory-indirect effective address.
+  const bool FexcNearControl = fexc_slice1 && BlockInfo.Is64BitMode && Info->Name &&
+                              (std::string_view(Info->Name) == "CALL" || std::string_view(Info->Name) == "JMP" ||
+                               std::string_view(Info->Name) == "RET");
   const bool HasNarrowingDisplacement =
-    !FexcNearDirect &&
+    !FexcNearDirect && !FexcNearControl &&
     (FEXCore::X86Tables::DecodeFlags::GetOpAddr(DecodeInst->Flags, 0) & FEXCore::X86Tables::DecodeFlags::FLAG_OPERAND_SIZE_LAST) != 0;
 
   const bool HasXMMFlags = (Info->Flags & InstFlags::FLAGS_XMM_FLAGS) != 0;

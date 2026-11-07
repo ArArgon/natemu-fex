@@ -479,7 +479,8 @@ void OpDispatchBuilder::POPSegmentOp(OpcodeArgs, uint32_t SegmentReg) {
 
 void OpDispatchBuilder::LEAVEOp(OpcodeArgs) {
   const auto GPRSize = GetGPROpSize();
-  const auto OperandSize = (Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_OPERAND_SIZE) ? OpSize::i16Bit : GPRSize;
+  const auto OperandSize = (Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_OPERAND_SIZE) &&
+                          !(fexc_slice1 && (Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_REX_WIDENING)) ? OpSize::i16Bit : GPRSize;
 
   if (fexc_slice1) {
     // natemu: load [RBP] first, then write RSP and RBP, so nothing is committed before the access (FEX's pop would
@@ -2540,6 +2541,12 @@ void OpDispatchBuilder::BTOp(OpcodeArgs, uint32_t SrcIndex, BTAction Action) {
     Src = Src.Sbfe(UnitShift, Size - UnitShift);
     Ref Offset = _Lshl(OpSize::i64Bit, Src.Ref(), _Constant(UnitShift - 3));
     AddressMode Address = {.Base = Dest, .Index = Offset, .AddrSize = OpSize::i64Bit};
+    if (fexc_slice1 && (Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_ADDRESS_SIZE)) {
+      // The signed bit-string displacement participates in 32-bit EA wrapping, before adding FS/GS.base.
+      auto EA = LoadSourceGPR_WithOpSize(Op, Op->Dest, OpSizeFromSrc(Op), Op->Flags, {.LoadData = false});
+      EA = _Bfe(OpSize::i64Bit, 32, 0, _Add(OpSize::i64Bit, EA, Offset));
+      Address = {.Base = AppendSegmentOffset(EA, Op->Flags), .AddrSize = OpSize::i64Bit};
+    }
 
     switch (Action) {
     case BTAction::BTNone: {
