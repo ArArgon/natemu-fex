@@ -2533,20 +2533,17 @@ void OpDispatchBuilder::BTOp(OpcodeArgs, uint32_t SrcIndex, BTAction Action) {
   } else {
     // Load the address to the memory location
     Ref Dest = MakeSegmentAddress(Op, Op->Dest);
-    // Get the bit selection from the src
-    auto BitSelect = Src.Bfe(0, 3);
-
-    // Address is provided as bits we want BYTE offsets
-    // Extract Signed offset
-    Src = Src.Sbfe(3, Size - 3);
-
-    // Get the address offset by shifting out the size of the op (To shift out the bit selection)
-    // Then use that to index in to the memory location by size of op
-    AddressMode Address = {.Base = Dest, .Index = Src.Ref(), .AddrSize = OpSize::i64Bit};
+    // x86 accesses the complete operand-sized unit, even when the selected bit is in its first byte.
+    const auto UnitShift = Size == 16 ? 4 : Size == 32 ? 5 : 6;
+    const auto UnitSize = IR::SizeToOpSize(Size / 8);
+    auto BitSelect = Src.Bfe(0, UnitShift);
+    Src = Src.Sbfe(UnitShift, Size - UnitShift);
+    Ref Offset = _Lshl(OpSize::i64Bit, Src.Ref(), _Constant(UnitShift - 3));
+    AddressMode Address = {.Base = Dest, .Index = Offset, .AddrSize = OpSize::i64Bit};
 
     switch (Action) {
     case BTAction::BTNone: {
-      Value = _LoadMemGPRAutoTSO(OpSize::i8Bit, Address, OpSize::i8Bit);
+      Value = _LoadMemGPRAutoTSO(UnitSize, Address, UnitSize);
       break;
     }
 
@@ -2555,12 +2552,12 @@ void OpDispatchBuilder::BTOp(OpcodeArgs, uint32_t SrcIndex, BTAction Action) {
 
       if (DestIsLockedMem(Op)) {
         HandledLock = true;
-        Value = _AtomicFetchCLR(OpSize::i8Bit, BitMask, LoadEffectiveAddress(this, Address, GetGPROpSize(), true));
+        Value = _AtomicFetchCLR(UnitSize, BitMask, LoadEffectiveAddress(this, Address, GetGPROpSize(), true));
       } else {
-        Value = _LoadMemGPRAutoTSO(OpSize::i8Bit, Address, OpSize::i8Bit);
+        Value = _LoadMemGPRAutoTSO(UnitSize, Address, UnitSize);
 
         auto Modified = _Andn(OpSize::i64Bit, Value, BitMask);
-        _StoreMemGPRAutoTSO(OpSize::i8Bit, Address, Modified, OpSize::i8Bit);
+        _StoreMemGPRAutoTSO(UnitSize, Address, Modified, UnitSize);
       }
       break;
     }
@@ -2570,12 +2567,12 @@ void OpDispatchBuilder::BTOp(OpcodeArgs, uint32_t SrcIndex, BTAction Action) {
 
       if (DestIsLockedMem(Op)) {
         HandledLock = true;
-        Value = _AtomicFetchOr(OpSize::i8Bit, BitMask, LoadEffectiveAddress(this, Address, GetGPROpSize(), true));
+        Value = _AtomicFetchOr(UnitSize, BitMask, LoadEffectiveAddress(this, Address, GetGPROpSize(), true));
       } else {
-        Value = _LoadMemGPRAutoTSO(OpSize::i8Bit, Address, OpSize::i8Bit);
+        Value = _LoadMemGPRAutoTSO(UnitSize, Address, UnitSize);
 
         auto Modified = _Or(OpSize::i64Bit, Value, BitMask);
-        _StoreMemGPRAutoTSO(OpSize::i8Bit, Address, Modified, OpSize::i8Bit);
+        _StoreMemGPRAutoTSO(UnitSize, Address, Modified, UnitSize);
       }
       break;
     }
@@ -2585,12 +2582,12 @@ void OpDispatchBuilder::BTOp(OpcodeArgs, uint32_t SrcIndex, BTAction Action) {
 
       if (DestIsLockedMem(Op)) {
         HandledLock = true;
-        Value = _AtomicFetchXor(OpSize::i8Bit, BitMask, LoadEffectiveAddress(this, Address, GetGPROpSize(), true));
+        Value = _AtomicFetchXor(UnitSize, BitMask, LoadEffectiveAddress(this, Address, GetGPROpSize(), true));
       } else {
-        Value = _LoadMemGPRAutoTSO(OpSize::i8Bit, Address, OpSize::i8Bit);
+        Value = _LoadMemGPRAutoTSO(UnitSize, Address, UnitSize);
 
         auto Modified = _Xor(OpSize::i64Bit, Value, BitMask);
-        _StoreMemGPRAutoTSO(OpSize::i8Bit, Address, Modified, OpSize::i8Bit);
+        _StoreMemGPRAutoTSO(UnitSize, Address, Modified, UnitSize);
       }
       break;
     }

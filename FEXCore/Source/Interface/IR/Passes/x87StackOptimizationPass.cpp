@@ -472,7 +472,7 @@ inline void X87StackOptimization::FlushStackFault() {
 }
 
 inline void X87StackOptimization::FexcEndInstruction() {
-  // natemu slice1 (I5c): the instruction's check operands for FexcPrecision::PlaceFPChecks, and (unmasked x87 exceptions) its
+  // natemu slice1: the instruction's check operands for FexcPrecision::PlaceFPChecks, and its
   // flags from the pending byte into the exception word, after everything it committed.
   if (FexcRip != ~0ull && (Fault || Overflow || SNaN || Tiny)) {
     auto& E = fexc_x87_extra[FexcRip];   // (FIST's out-of-range bit, the dispatcher's, may be there already)
@@ -481,7 +481,7 @@ inline void X87StackOptimization::FexcEndInstruction() {
     if (SNaN) E.invalid = SNaN;
     E.tiny = Tiny;
   }
-  if (FexcRip != ~0ull && fexc_x87.count(FexcRip) && fexc_x87_unmasked) {
+  if (FexcRip != ~0ull && fexc_x87.count(FexcRip)) {
     Ref Pending = IREmit->_LoadContextGPR(OpSize::i8Bit, FEXC_X87_PENDING);
     // A stack fault has precedence over the operation's own exceptions (SDM Vol.1 4.9.2): their flags are dropped.
     if (Fault) Pending = IREmit->_And(OpSize::i32Bit, Pending, IREmit->_Sub(OpSize::i32Bit, Fault, GetConstant(1)));

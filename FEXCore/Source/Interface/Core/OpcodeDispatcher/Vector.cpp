@@ -2131,17 +2131,16 @@ Ref OpDispatchBuilder::InsertPSOpImpl(OpcodeArgs, const X86Tables::DecodedOperan
     Dest = LoadSourceFPR_WithOpSize(Op, Src1, DstSize, Op->Flags);
   }
 
+  // A zeroed result lane does not suppress the memory operand's faults.
+  Ref Src {};
+  if (!Src2.IsGPR()) {
+    CountS = 0;
+    Src = LoadSourceFPR_WithOpSize(Op, Src2, OpSize::i32Bit, Op->Flags);
+  }
   if ((ZMask & (1 << CountD)) == 0) {
-    // In the case that ZMask overwrites the destination element, then don't even insert
-    Ref Src {};
     if (Src2.IsGPR()) {
       Src = LoadSourceFPR(Op, Src2, Op->Flags);
-    } else {
-      // If loading from memory then CountS is forced to zero
-      CountS = 0;
-      Src = LoadSourceFPR_WithOpSize(Op, Src2, OpSize::i32Bit, Op->Flags);
     }
-
     Dest = _VInsElement(DstSize, OpSize::i32Bit, CountD, CountS, Dest, Src);
   }
 
