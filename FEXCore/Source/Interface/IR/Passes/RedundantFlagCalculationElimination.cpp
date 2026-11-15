@@ -703,6 +703,7 @@ void DeadFlagCalculationEliminination::OptimizeParity(IREmitter* IREmit, IRListV
 void DeadFlagCalculationEliminination::Run(IREmitter* IREmit) {
   FEXCORE_PROFILE_SCOPED("PassManager::DFE");
   if (fexc_slice1) {
+    FexcPrecision::PlaceFlushes(IREmit);   // natemu slice1 (AFP fallback chunk 3a): software DAZ/FTZ flushes, before the checks
     FexcPrecision::PlaceFPChecks(IREmit);   // natemu slice1 (I5c): unmasked floating-point exception checks (fault points)
   }
 
