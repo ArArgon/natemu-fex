@@ -566,6 +566,8 @@ private:
   void FexcTinyLanes(ARMEmitter::VRegister R, uint32_t Elem, uint32_t Lanes, uint64_t Unmasked, uint32_t First = 0);
   void FexcSimdCheckWords(uint32_t Mask);
   void FexcSimdStep(ARMEmitter::VRegister R);
+  void FexcFlushWords(ARMEmitter::VRegister Dst, ARMEmitter::VRegister Src, uint32_t Elem, bool Q, bool Scalar, bool Flags);
+  void FexcFlushStep(ARMEmitter::VRegister R);
   void FexcX87End();
   // natemu (fexc), profile slice1 (I6b): PCMPxSTRx's intermediate result by the resident's `svc #STRING` (shim/fexc_sites.inc).
   void FexcStringSvc(const IR::IROp_Header* IROp, IR::Ref Node);

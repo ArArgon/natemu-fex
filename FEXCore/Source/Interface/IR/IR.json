@@ -2909,6 +2909,17 @@
                 ],
         "HasSideEffects": true
       },
+      "FPR = FexcFlush OpSize:#RegisterSize, OpSize:#ElementSize, FPR:$Vector, u8:$Mode": {
+        "Desc": ["natemu slice1 (AFP fallback chunk 3a): $Vector with each element of $ElementSize bytes whose exponent field is zero",
+                 "(a zero or a denormal) replaced by a zero of its sign: x86's DAZ on an operand, FTZ on a result. $Mode bit 0: only",
+                 "element 0 (the other bits are kept); bit 1: raise the underflow and inexact flags for each denormal flushed",
+                 "(an fmul of the denormal by itself). Placed by FexcPrecision::PlaceFlushes on hosts without FEAT_AFP, under",
+                 "fexc's --daz and --ftz"
+                ],
+        "DestSize": "RegisterSize",
+        "ElementSize": "ElementSize",
+        "HasSideEffects": true
+      },
       "GPR = FexcMxcsr": {
         "Desc": ["natemu slice1 (perf chunk 25): STMXCSR's value: MXCSR as the resident wrote it at the block's entry (CPUState::mxcsr)",
                  "with the exception flags FPSR and the SIMD flag byte gathered since (the resident's bank: IE..PE from IOC DZC OFC",

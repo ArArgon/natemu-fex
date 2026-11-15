@@ -274,6 +274,15 @@ void Arm64JITCore::VFScalarFMAOperation(IR::OpSize OpSize, IR::OpSize ElementSiz
                                                        ElementSize == IR::OpSize::i32Bit ? ARMEmitter::SubRegSize::i32Bit :
                                                                                            ARMEmitter::SubRegSize::i64Bit);
 
+  if (Dst != Upper && (Dst == Vector1 || Dst == Vector2 || Dst == Addend)) {
+    // natemu slice1: Dst holds a source (the allocator gave it a dying operand's register): the move of the upper bits would
+    // clobber it before the operation reads it, so the result goes to a temporary first.
+    ScalarEmit(VTMP1, Vector1, Vector2, Addend);
+    mov(Dst.Q(), Upper.Q());
+    ins(SubRegSize.Vector, Dst.Q(), 0, VTMP1.Q(), 0);
+    return;
+  }
+
   if (Dst != Upper) {
     // If destination is not tied, move the upper bits to the destination first.
     mov(Dst.Q(), Upper.Q());
@@ -1216,6 +1225,7 @@ DEF_OP(VFAddV) {
     // ASIMD doesn't support faddv, need to use multiple faddp to match behaviour.
     if (ElementSize == IR::OpSize::i32Bit) {
       faddp(SubRegSize.Vector, Dst.Q(), Vector.Q(), Vector.Q());
+      if (fexc_slice1) FexcFlushStep(Dst);   // natemu slice1 (AFP fallback chunk 3a): software DAZ/FTZ between the add levels
       if (fexc_slice1) FexcSimdStep(Dst);   // natemu slice1 (I5c): DPPS's first add level has its own exception check
       faddp(SubRegSize.Scalar, Dst, Dst);
     } else {
