@@ -564,7 +564,9 @@ private:
   void FexcPendingCheck();
   void FexcTinyCheck(const IR::IROp_Header* IROp, IR::Ref Node);
   void FexcTinyLanes(ARMEmitter::VRegister R, uint32_t Elem, uint32_t Lanes, uint64_t Unmasked, uint32_t First = 0);
-  void FexcSimdCheckWords(uint32_t Mask);
+  void FexcSimdCheckWords(uint32_t Mask, const ARMEmitter::Register* De = nullptr);
+  void FexcX87CheckWords(IR::OrderedNodeWrapper Fault, IR::OrderedNodeWrapper Overflow, IR::OrderedNodeWrapper Invalid, IR::OrderedNodeWrapper Tiny,
+                         uint32_t Mask, const IR::OrderedNodeWrapper* De);
   void FexcSimdStep(ARMEmitter::VRegister R);
   void FexcFlushWords(ARMEmitter::VRegister Dst, ARMEmitter::VRegister Src, uint32_t Elem, bool Q, bool Scalar, bool Flags);
   void FexcFlushStep(ARMEmitter::VRegister R);

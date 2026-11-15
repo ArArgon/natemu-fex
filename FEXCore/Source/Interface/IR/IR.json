@@ -2909,6 +2909,20 @@
                 ],
         "HasSideEffects": true
       },
+      "FexcSimdCheckDe u32:$Mask, GPR:$De": {
+        "Desc": ["natemu slice1 (AFP fallback chunk 3b, row 7): FexcSimdCheck with a software denormal-operand flag: $De is nonzero (low",
+                 "32 bits) when the instruction's operands contain a denormal (x86's DE, which a host without FEAT_AFP never raises), and",
+                 "FPSR bit 7 (IDC) of the check word is then set. Placed only without AFP and with MXCSR.DM clear"
+                ],
+        "HasSideEffects": true
+      },
+      "FexcX87CheckDe GPR:$Fault, GPR:$Overflow, GPR:$Invalid, GPR:$Tiny, GPR:$De, u32:$Mask, u8:$Store": {
+        "Desc": ["natemu slice1 (AFP fallback chunk 3b, row 8): FexcX87Check with a software denormal-memory-operand flag: $De is nonzero",
+                 "(low 32 bits) for an m32/m64 operand that is a denormal, and bit 7 (DE) of the pending byte is then set before the stack",
+                 "fault drops it. Placed only without AFP and with FCW.DM clear"
+                ],
+        "HasSideEffects": true
+      },
       "FPR = FexcFlush OpSize:#RegisterSize, OpSize:#ElementSize, FPR:$Vector, u8:$Mode": {
         "Desc": ["natemu slice1 (AFP fallback chunk 3a): $Vector with each element of $ElementSize bytes whose exponent field is zero",
                  "(a zero or a denormal) replaced by a zero of its sign: x86's DAZ on an operand, FTZ on a result. $Mode bit 0: only",
