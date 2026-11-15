@@ -452,8 +452,9 @@ DEF_OP(VFMinScalarInsert) {
     } else {
       // Only take the first operand if it is strictly less. Otherwise take
       // the second. This emulates all the weird x86 rules for signed zero and
-      // NaNs. No, they're not IEEE-754 semantics.
-      fcmp(SubRegSize.Scalar, Src1, Src2);
+      // NaNs. No, they're not IEEE-754 semantics. The signalling compare makes
+      // a QNaN operand raise IE as x86 does.
+      fcmpe(SubRegSize.Scalar, Src1, Src2);
       fcsel(SubRegSize.Scalar, Dst, Src1, Src2, ARMEmitter::Condition::CC_MI);
     }
   };
@@ -479,7 +480,7 @@ DEF_OP(VFMaxScalarInsert) {
       fmax(SubRegSize.Scalar, Dst, Src1, Src2);
     } else {
       // Only take the first operand if it is strictly greater. See fmin.
-      fcmp(SubRegSize.Scalar, Src1, Src2);
+      fcmpe(SubRegSize.Scalar, Src1, Src2);
       fcsel(SubRegSize.Scalar, Dst, Src1, Src2, ARMEmitter::Condition::CC_GT);
     }
   };

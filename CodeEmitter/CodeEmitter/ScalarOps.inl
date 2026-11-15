@@ -1001,6 +1001,18 @@ public:
     FloatCompare(0, 0, ConvertedSize, 0b00, 0b00000, rn, rm);
   }
 
+  // Signalling compare: raises IOC for a QNaN operand too.
+  void fcmpe(ScalarRegSize Size, VRegister rn, VRegister rm) {
+    LOGMAN_THROW_A_FMT(Size != ScalarRegSize::i8Bit, "8-bit destination not supported");
+
+    const auto ConvertedSize = Size == ARMEmitter::ScalarRegSize::i64Bit ? 0b01 :
+                               Size == ARMEmitter::ScalarRegSize::i32Bit ? 0b00 :
+                               Size == ARMEmitter::ScalarRegSize::i16Bit ? 0b11 :
+                                                                           0;
+
+    FloatCompare(0, 0, ConvertedSize, 0b00, 0b10000, rn, rm);
+  }
+
   void fcmp(SRegister rn, SRegister rm) {
     FloatCompare(0, 0, 0b00, 0b00, 0b00000, rn.V(), rm.V());
   }
