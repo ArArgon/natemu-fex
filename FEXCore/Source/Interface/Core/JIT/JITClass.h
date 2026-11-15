@@ -568,6 +568,7 @@ private:
   void FexcX87CheckWords(IR::OrderedNodeWrapper Fault, IR::OrderedNodeWrapper Overflow, IR::OrderedNodeWrapper Invalid, IR::OrderedNodeWrapper Tiny,
                          uint32_t Mask, const IR::OrderedNodeWrapper* De);
   void FexcSimdStep(ARMEmitter::VRegister R);
+  void FexcDenormalStep(ARMEmitter::VRegister V, uint32_t Elem);
   void FexcFlushWords(ARMEmitter::VRegister Dst, ARMEmitter::VRegister Src, uint32_t Elem, bool Q, bool Scalar, bool Flags);
   void FexcFlushStep(ARMEmitter::VRegister R);
   void FexcX87End();

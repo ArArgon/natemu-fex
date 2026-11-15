@@ -1223,6 +1223,7 @@ DEF_OP(VFAddV) {
     faddv(SubRegSize.Vector, Dst, Pred, Vector.Z());
   } else {
     // ASIMD doesn't support faddv, need to use multiple faddp to match behaviour.
+    if (fexc_slice1) FexcDenormalStep(Vector, IR::OpSizeToSize(ElementSize));   // natemu slice1 (AFP fallback chunk 3b): software DE of this add level
     if (ElementSize == IR::OpSize::i32Bit) {
       faddp(SubRegSize.Vector, Dst.Q(), Vector.Q(), Vector.Q());
       if (fexc_slice1) FexcFlushStep(Dst);   // natemu slice1 (AFP fallback chunk 3a): software DAZ/FTZ between the add levels
