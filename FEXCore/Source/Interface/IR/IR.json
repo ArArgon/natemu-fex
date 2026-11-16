@@ -2923,6 +2923,21 @@
                 ],
         "HasSideEffects": true
       },
+      "FPR = FexcSimdSkip OpSize:#RegisterSize, OpSize:#ElementSize, FPR:$A, FPR:$B, FPR:$C, u32:$Mode": {
+        "Desc": ["natemu slice1 (AFP accurate plan, chunk 2, B): the screen of the masked SSE/AVX denormal flag. Opens a skipped span, closed by",
+                 "FexcSimdSkipEnd: when every examined lane (all lanes of a 128-bit op, lane 0 of a scalar one: $Mode bit 8) of the first",
+                 "$Mode & 255 of $A, $B, $C has a nonzero exponent field (it is no denormal, so the span's exact test could not set the flag)",
+                 "the JIT branches over the span. The result is scratch. Without a skip (a block with spill slots: a fill inside the span",
+                 "would be skipped too) the span is always run"
+                ],
+        "DestSize": "RegisterSize",
+        "ElementSize": "ElementSize",
+        "HasSideEffects": true
+      },
+      "FexcSimdSkipEnd": {
+        "Desc": ["natemu slice1 (AFP accurate plan, chunk 2, B): the end of the span FexcSimdSkip opened (the branch's target)"],
+        "HasSideEffects": true
+      },
       "FexcKeep FPR:$Value, u32:$Tag": {
         "Desc": ["natemu slice1 (AFP fallback, tininess after rounding): emits no code. It uses $Value, so $Value stays live",
                  "up to the check that follows (the resident reads the operands of the instruction's multiplies, divides, FMAs and",
