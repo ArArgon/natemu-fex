@@ -226,26 +226,7 @@ namespace FEXCore::CPU {
 DEF_UNOP(VAbs, abs, true)
 DEF_UNOP(VPopcount, cnt, true)
 DEF_UNOP(VNeg, neg, false)
-
-DEF_OP(VFNeg) {
-  const auto Op = IROp->C<IR::IROp_VFNeg>();
-  const auto OpSize = IROp->Size;
-  const auto Is256Bit = OpSize == IR::OpSize::i256Bit;
-  LOGMAN_THROW_A_FMT(!Is256Bit || HostSupportsSVE256, "Need SVE256 support in order to use {} with 256-bit operation", __func__);
-  const auto SubRegSize = ConvertSubRegSize8(IROp);
-  const auto Dst = GetVReg(Node);
-  const auto Src = GetVReg(Op->Vector);
-
-  if (HostSupportsSVE256 && Is256Bit) {
-    fneg(SubRegSize, Dst.Z(), PRED_TMP_32B.Merging(), Src.Z());
-  } else if (OpSize == IR::OpSize::i128Bit && FexcNegKeepsNaN()) {
-    // natemu slice1 (no AFP): the only 128-bit VFNeg is the negation of VFMADDSUB's addend lanes (the AVX128 `FexcNegate`; the x87
-    // FCHS is a 64-bit one and flips a NaN's sign, as x86 does). x86 returns the NaN operand itself.
-    FexcNegKeepNaN(SubRegSize, Dst, Src, true);
-  } else {
-    fneg(SubRegSize, Dst.Q(), Src.Q());
-  }
-}
+DEF_UNOP(VFNeg, fneg, false)
 
 DEF_BITOP(VAnd, and_)
 DEF_BITOP(VAndn, bic)
@@ -321,23 +302,6 @@ void Arm64JITCore::VFScalarFMAOperation(IR::OpSize OpSize, IR::OpSize ElementSiz
     // Host doesn't support AFP, need to emit in to a temporary then insert.
     ScalarEmit(VTMP1, Vector1, Vector2, Addend);
     ins(SubRegSize.Vector, Dst.Q(), 0, VTMP1.Q(), 0);
-  }
-}
-
-// natemu slice1 (no AFP): the negation of a value that can be a NaN and x86 keeps as it is (the addend of VFMSUB/VFNMSUB/VFMADDSUB,
-// the subtracted operand of ADDSUB). With FPCR.AH = 0 `fneg` flips a NaN's sign; `fmul` by -1.0 keeps it (and quiets an SNaN with IOC,
-// which the operation that follows raises for it anyway). A finite value, a zero or an infinity is negated exactly, a denormal too
-// except under FPCR.FZ = 1, which the host sets only with both DAZ and FTZ (x86 flushes the operand then as well, sign kept). VTMP2.
-bool Arm64JITCore::FexcNegKeepsNaN() const {
-  return fexc_slice1 && !HostSupportsAFP;
-}
-
-void Arm64JITCore::FexcNegKeepNaN(ARMEmitter::SubRegSize Size, ARMEmitter::VRegister Dst, ARMEmitter::VRegister Src, bool Is128Bit) {
-  fmov(Size, VTMP2.Q(), -1.0f);
-  if (Is128Bit) {
-    fmul(Size, Dst.Q(), Src.Q(), VTMP2.Q());
-  } else {
-    fmul(Size, Dst.D(), Src.D(), VTMP2.D());
   }
 }
 
@@ -4725,11 +4689,9 @@ DEF_OP(VFMLS) {
     }
 
     if (Is128Bit) {
-      if (FexcNegKeepsNaN()) FexcNegKeepNaN(SubRegSize, DestTmp, VectorAddend, true); else   // natemu slice1 (no AFP): a NaN keeps its sign
       fneg(SubRegSize, DestTmp.Q(), VectorAddend.Q());
       fmla(SubRegSize, DestTmp.Q(), Vector1.Q(), Vector2.Q());
     } else {
-      if (FexcNegKeepsNaN()) FexcNegKeepNaN(SubRegSize, DestTmp, VectorAddend, false); else
       fneg(SubRegSize, DestTmp.D(), VectorAddend.D());
       fmla(SubRegSize, DestTmp.D(), Vector1.D(), Vector2.D());
     }
@@ -4883,11 +4845,9 @@ DEF_OP(VFNMLS) {
     }
 
     if (Is128Bit) {
-      if (FexcNegKeepsNaN()) FexcNegKeepNaN(SubRegSize, DestTmp, VectorAddend, true); else   // natemu slice1 (no AFP): a NaN keeps its sign
       fneg(SubRegSize, DestTmp.Q(), VectorAddend.Q());
       fmls(SubRegSize, DestTmp.Q(), Vector1.Q(), Vector2.Q());
     } else {
-      if (FexcNegKeepsNaN()) FexcNegKeepNaN(SubRegSize, DestTmp, VectorAddend, false); else
       fneg(SubRegSize, DestTmp.D(), VectorAddend.D());
       fmls(SubRegSize, DestTmp.D(), Vector1.D(), Vector2.D());
     }

@@ -2095,12 +2095,11 @@ void OpDispatchBuilder::AVX128_VFMAddSubImpl(OpcodeArgs, bool AddSub, uint8_t Sr
   // natemu slice1 (I8): the subtracted lanes' addend negated by fneg, which keeps a NaN's sign under FPCR.AH = 1 (x86 returns
   // the NaN operand itself); FEX's XOR with the sign mask flipped it. The lanes come from the sign mask.
   auto FexcNegate = [&](Ref Addend) -> Ref {
-    if (!CTX->HostFeatures.SupportsAFP) {   // (no AFP: the lanes' multiplier, the sign mask's lanes as -1.0, the others 1.0: a NaN keeps its sign)
-      return _VFMul(OpSize::i128Bit, ElementSize, Addend,
-                    LoadAndCacheNamedVectorConstant(OpSize::i128Bit, AddSub ? (ElementSize == OpSize::i32Bit ? NAMED_VECTOR_PADDSUBPS_MUL : NAMED_VECTOR_PADDSUBPD_MUL)
-                                                                           : (ElementSize == OpSize::i32Bit ? NAMED_VECTOR_PSUBADDPS_MUL : NAMED_VECTOR_PSUBADDPD_MUL)));
-    }
     Ref Lanes = _VSShrI(OpSize::i128Bit, ElementSize, ConstantEOR, ElementSize == OpSize::i32Bit ? 31 : 63);
+    if (!CTX->HostFeatures.SupportsAFP) {   // (no AFP: the subtracted lanes by a multiply by the cached -1.0, a NaN keeping its sign; the added lanes untouched)
+      auto Minus = _VFMul(OpSize::i128Bit, ElementSize, Addend, LoadAndCacheNamedVectorConstant(OpSize::i128Bit, ElementSize == OpSize::i32Bit ? NAMED_VECTOR_NEG_ONE_PS : NAMED_VECTOR_NEG_ONE_PD));
+      return _VBSL(OpSize::i128Bit, Lanes, Minus, Addend);
+    }
     return _VBSL(OpSize::i128Bit, Lanes, _VFNeg(OpSize::i128Bit, ElementSize, Addend), Addend);
   };
   auto InvertedSourceLow = fexc_slice1 ? FexcNegate(Sources[AddendIdx - 1].Low) : _VXor(OpSize::i128Bit, Sources[AddendIdx - 1].Low, ConstantEOR);

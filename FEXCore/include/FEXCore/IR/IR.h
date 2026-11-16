@@ -62,8 +62,6 @@ enum NamedVectorConstant : uint8_t {
   NAMED_VECTOR_SHA1RNDS_K3,
   NAMED_VECTOR_PADDSUBPS_MUL,   // natemu slice1 (no AFP): (-1, 1, -1, 1) / (-1, 1), the ADDSUB's multiplier
   NAMED_VECTOR_PADDSUBPD_MUL,
-  NAMED_VECTOR_PSUBADDPS_MUL,   // (1, -1, 1, -1) / (1, -1)
-  NAMED_VECTOR_PSUBADDPD_MUL,
   NAMED_VECTOR_NEG_ONE_PS,      // -1.0 in every lane: the negated addend of the packed VFMSUB/VFNMSUB
   NAMED_VECTOR_NEG_ONE_PD,
 

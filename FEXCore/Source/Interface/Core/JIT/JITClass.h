@@ -678,8 +678,6 @@ private:
                               std::variant<ARMEmitter::VRegister, ARMEmitter::Register> Vector2, bool UpperZero = false);
   // natemu slice1 (no AFP): the scalar op `Node` writes its register directly, its upper bits being known zero (FexcPrecision::MarkUpperZero)
   bool FexcUpperZero(IR::Ref Node) const;
-  bool FexcNegKeepsNaN() const;
-  void FexcNegKeepNaN(ARMEmitter::SubRegSize Size, ARMEmitter::VRegister Dst, ARMEmitter::VRegister Src, bool Is128Bit);
 
   void Emulate128BitGather(IR::OpSize Size, IR::OpSize ElementSize, ARMEmitter::VRegister Dst, ARMEmitter::VRegister IncomingDst,
                            std::optional<ARMEmitter::Register> BaseAddr, ARMEmitter::VRegister VectorIndexLow,

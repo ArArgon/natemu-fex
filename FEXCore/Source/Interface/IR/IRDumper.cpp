@@ -256,10 +256,6 @@ static void PrintArg(fextl::ostringstream* out, const IRListView*, NamedVectorCo
         return "addsubps_mul";
       case NamedVectorConstant::NAMED_VECTOR_PADDSUBPD_MUL:
         return "addsubpd_mul";
-      case NamedVectorConstant::NAMED_VECTOR_PSUBADDPS_MUL:
-        return "subaddps_mul";
-      case NamedVectorConstant::NAMED_VECTOR_PSUBADDPD_MUL:
-        return "subaddpd_mul";
       case NamedVectorConstant::NAMED_VECTOR_NEG_ONE_PS:
         return "neg_one_ps";
       case NamedVectorConstant::NAMED_VECTOR_NEG_ONE_PD:
