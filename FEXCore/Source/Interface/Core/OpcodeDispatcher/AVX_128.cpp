@@ -2017,6 +2017,24 @@ void OpDispatchBuilder::AVX128_VFMAImpl(OpcodeArgs, IROps IROp, uint8_t Src1Idx,
   RefPair Sources[3] = {Dest, Src1, Src2};
 
   RefPair Result {};
+  if (fexc_slice1 && !CTX->HostFeatures.SupportsAFP && (IROp == OP_VFMLS || IROp == OP_VFNMLS)) {
+    // natemu slice1 (no AFP): the addend is negated by a multiply by the cached constant -1.0 (a NaN keeps its sign, as in x86; fneg flips
+    // it with FPCR.AH = 0) and the op is the one with the addend added: -(c) + a*b is VFMLA of -c, -(a*b) - c is VFNMLA of -c.
+    const auto K = LoadAndCacheNamedVectorConstant(OpSize::i128Bit, ElementSize == OpSize::i32Bit ? NAMED_VECTOR_NEG_ONE_PS : NAMED_VECTOR_NEG_ONE_PD);
+    const auto NewOp = IROp == OP_VFMLS ? OP_VFMLA : OP_VFNMLA;
+    auto Low = _VFMul(OpSize::i128Bit, ElementSize, Sources[AddendIdx - 1].Low, K);
+    DeriveOp(Result_Low, NewOp, _VFMLA(OpSize::i128Bit, ElementSize, Sources[Src1Idx - 1].Low, Sources[Src2Idx - 1].Low, Low));
+    Result.Low = Result_Low;
+    if (Is128Bit) {
+      Result.High = LoadZeroVector(OpSize::i128Bit);
+    } else {
+      auto High = _VFMul(OpSize::i128Bit, ElementSize, Sources[AddendIdx - 1].High, K);
+      DeriveOp(Result_High, NewOp, _VFMLA(OpSize::i128Bit, ElementSize, Sources[Src1Idx - 1].High, Sources[Src2Idx - 1].High, High));
+      Result.High = Result_High;
+    }
+    AVX128_StoreResult_WithOpSize(Op, Op->Dest, Result);
+    return;
+  }
   DeriveOp(Result_Low, IROp, _VFMLA(OpSize::i128Bit, ElementSize, Sources[Src1Idx - 1].Low, Sources[Src2Idx - 1].Low, Sources[AddendIdx - 1].Low));
   Result.Low = Result_Low;
   if (Is128Bit) {
@@ -2076,7 +2094,12 @@ void OpDispatchBuilder::AVX128_VFMAddSubImpl(OpcodeArgs, bool AddSub, uint8_t Sr
   }
   // natemu slice1 (I8): the subtracted lanes' addend negated by fneg, which keeps a NaN's sign under FPCR.AH = 1 (x86 returns
   // the NaN operand itself); FEX's XOR with the sign mask flipped it. The lanes come from the sign mask.
-  auto FexcNegate = [&](Ref Addend) {
+  auto FexcNegate = [&](Ref Addend) -> Ref {
+    if (!CTX->HostFeatures.SupportsAFP) {   // (no AFP: the lanes' multiplier, the sign mask's lanes as -1.0, the others 1.0: a NaN keeps its sign)
+      return _VFMul(OpSize::i128Bit, ElementSize, Addend,
+                    LoadAndCacheNamedVectorConstant(OpSize::i128Bit, AddSub ? (ElementSize == OpSize::i32Bit ? NAMED_VECTOR_PADDSUBPS_MUL : NAMED_VECTOR_PADDSUBPD_MUL)
+                                                                           : (ElementSize == OpSize::i32Bit ? NAMED_VECTOR_PSUBADDPS_MUL : NAMED_VECTOR_PSUBADDPD_MUL)));
+    }
     Ref Lanes = _VSShrI(OpSize::i128Bit, ElementSize, ConstantEOR, ElementSize == OpSize::i32Bit ? 31 : 63);
     return _VBSL(OpSize::i128Bit, Lanes, _VFNeg(OpSize::i128Bit, ElementSize, Addend), Addend);
   };
