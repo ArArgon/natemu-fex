@@ -2916,6 +2916,13 @@
                 ],
         "HasSideEffects": true
       },
+      "FexcSimdDe GPR:$De": {
+        "Desc": ["natemu slice1 (AFP accurate plan, chunk 2): sets FPSR.IDC (bit 7) when $De (low 32 bits) is nonzero, by a forward branch",
+                 "round `mrs; orr; msr`: the software denormal-operand flag of an SSE/AVX op whose DE is masked, which a host without",
+                 "FEAT_AFP never raises (accurate mode only; FexcPrecision::PlaceFPChecks places it before the op it describes)"
+                ],
+        "HasSideEffects": true
+      },
       "FexcKeep FPR:$Value, u32:$Tag": {
         "Desc": ["natemu slice1 (AFP fallback, tininess after rounding): emits no code. It uses $Value, so $Value stays live",
                  "up to the check that follows (the resident reads the operands of the instruction's multiplies, divides, FMAs and",
