@@ -2916,6 +2916,14 @@
                 ],
         "HasSideEffects": true
       },
+      "FexcKeep FPR:$Value, u32:$Tag": {
+        "Desc": ["natemu slice1 (AFP fallback, tininess after rounding): emits no code. It uses $Value, so $Value's register is not reused",
+                 "before the check that follows (the resident reads the operands of the instruction's multiplies, divides, FMAs and",
+                 "narrowing conversions from the registers at the check's stub), and the JIT records $Tag with the register for that",
+                 "check's site. Placed only without FEAT_AFP and with MXCSR.UM clear"
+                ],
+        "HasSideEffects": true
+      },
       "FexcX87CheckDe GPR:$Fault, GPR:$Overflow, GPR:$Invalid, GPR:$Tiny, GPR:$De, u32:$Mask, u8:$Store": {
         "Desc": ["natemu slice1 (AFP fallback chunk 3b, row 8): FexcX87Check with a software denormal-memory-operand flag: $De is nonzero",
                  "(low 32 bits) for an m32/m64 operand that is a denormal, and bit 7 (DE) of the pending byte is then set before the stack",
