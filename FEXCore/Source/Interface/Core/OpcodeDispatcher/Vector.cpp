@@ -3569,9 +3569,10 @@ void OpDispatchBuilder::MOVQ2DQ(OpcodeArgs, bool ToXMM) {
 
 Ref OpDispatchBuilder::ADDSUBPOpImpl(OpSize Size, IR::OpSize ElementSize, Ref Src1, Ref Src2) {
   if (fexc_slice1 && !CTX->HostFeatures.SupportsAFP) {
-    // natemu slice1 (no AFP): the JIT negates the even lanes of Src2 by `fmul` (a NaN keeps its sign, as in x86) and adds: Rotate 0 is
-    // that lowering, on the source as it is (no swap).
-    return _VFCADD(Size, ElementSize, Src1, Src2, 0);
+    // natemu slice1 (no AFP): Src2 is multiplied by (-1, 1, -1, 1) (a NaN keeps its sign, as in x86; the constant is
+    // cached for the block) and added.
+    auto Multiplier = LoadAndCacheNamedVectorConstant(Size, ElementSize == OpSize::i32Bit ? NAMED_VECTOR_PADDSUBPS_MUL : NAMED_VECTOR_PADDSUBPD_MUL);
+    return _VFAdd(Size, ElementSize, Src1, _VFMul(Size, ElementSize, Src2, Multiplier));
   }
   if (CTX->HostFeatures.SupportsFCMA) {
     if (ElementSize == OpSize::i32Bit) {

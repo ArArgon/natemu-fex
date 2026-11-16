@@ -60,6 +60,8 @@ enum NamedVectorConstant : uint8_t {
   NAMED_VECTOR_SHA1RNDS_K1,
   NAMED_VECTOR_SHA1RNDS_K2,
   NAMED_VECTOR_SHA1RNDS_K3,
+  NAMED_VECTOR_PADDSUBPS_MUL,   // natemu slice1 (no AFP): (-1, 1, -1, 1) / (-1, 1), the ADDSUB's multiplier
+  NAMED_VECTOR_PADDSUBPD_MUL,
 
   NAMED_VECTOR_CONST_POOL_MAX,
   // Beginning of named constants that don't have a constant pool backing.

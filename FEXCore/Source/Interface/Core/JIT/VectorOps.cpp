@@ -4559,26 +4559,6 @@ DEF_OP(VFCADD) {
   const auto Vector1 = GetVReg(Op->Vector1);
   const auto Vector2 = GetVReg(Op->Vector2);
 
-  if (Op->Rotate == 0) {
-    // natemu slice1 (no AFP): x86 ADDSUBPS/PD (the dispatcher's `FexcAddSub`): Vector2 is the unswapped source, even lanes subtract it, odd
-    // lanes add it. FCADD flips the sign of a NaN subtrahend (FPCR.AH = 0; x86 returns the NaN as it is): the source is multiplied by
-    // (-1, 1, -1, 1) first (`fmul` keeps a NaN's sign; by 1.0 and -1.0 it is exact, and under FPCR.FZ = 1, set only with DAZ and FTZ
-    // both, it flushes a denormal that x86's DAZ flushes too) and added.
-    LOGMAN_THROW_A_FMT(OpSize != IR::OpSize::i256Bit && (IROp->ElementSize == IR::OpSize::i32Bit || IROp->ElementSize == IR::OpSize::i64Bit), "natemu ADDSUB size");
-    const auto Is128 = OpSize == IR::OpSize::i128Bit;
-    fmov(SubRegSize, VTMP1.Q(), 1.0f);
-    fmov(SubRegSize, VTMP2.Q(), -1.0f);
-    trn1(SubRegSize, VTMP2.Q(), VTMP2.Q(), VTMP1.Q());   // (-1, 1, -1, 1) / (-1, 1)
-    if (Is128) {
-      fmul(SubRegSize, VTMP1.Q(), Vector2.Q(), VTMP2.Q());
-      fadd(SubRegSize, Dst.Q(), Vector1.Q(), VTMP1.Q());
-    } else {
-      fmul(SubRegSize, VTMP1.D(), Vector2.D(), VTMP2.D());
-      fadd(SubRegSize, Dst.D(), Vector1.D(), VTMP1.D());
-    }
-    return;
-  }
-
   LOGMAN_THROW_A_FMT(Op->Rotate == 90 || Op->Rotate == 270, "Invalidate Rotate");
   const auto Rotate = Op->Rotate == 90 ? ARMEmitter::Rotation::ROTATE_90 : ARMEmitter::Rotation::ROTATE_270;
 

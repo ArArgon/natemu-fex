@@ -252,6 +252,10 @@ static void PrintArg(fextl::ostringstream* out, const IRListView*, NamedVectorCo
         return "sha1rnds_k2";
       case NamedVectorConstant::NAMED_VECTOR_SHA1RNDS_K3:
         return "sha1rnds_k3";
+      case NamedVectorConstant::NAMED_VECTOR_PADDSUBPS_MUL:
+        return "addsubps_mul";
+      case NamedVectorConstant::NAMED_VECTOR_PADDSUBPD_MUL:
+        return "addsubpd_mul";
       case NamedVectorConstant::NAMED_VECTOR_MAX:
         return "<Programming Error: Printing MAX value>";
     }
