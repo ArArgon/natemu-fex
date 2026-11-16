@@ -19,6 +19,7 @@ $end_info$
 #include "Interface/Core/JIT/DebugData.h"
 #include "Interface/Core/JIT/JITClass.h"
 #include "Interface/IR/Passes/RegisterAllocationPass.h"
+#include <fexc_precision.h>
 
 #include "Utils/MemberFunctionToPointer.h"
 #include "Utils/variable_length_integer.h"
@@ -1245,6 +1246,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
   DebugData->Relocations = &Relocations;
 
   this->IR = nullptr;
+  FexcPrecision::UpperZeroOps.clear();   // natemu slice1: the marks are this IR's (MarkUpperZero), never a later compile's
 
   return std::move(CodeData);
 }

@@ -8,6 +8,7 @@ $end_info$
 #include "Interface/Core/Dispatcher/Dispatcher.h"
 #include "Interface/Core/JIT/JITClass.h"
 #include <fexc_hook.h>
+#include <fexc_precision.h>
 
 #include <FEXCore/Utils/MathUtils.h>
 
@@ -194,7 +195,7 @@ namespace FEXCore::CPU {
     const auto Vector1 = GetVReg(Op->Vector1);                                                                                \
     const auto Vector2 = GetVReg(Op->Vector2);                                                                                \
                                                                                                                               \
-    VFScalarOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, ScalarEmit, Dst, Vector1, Vector2);                         \
+    VFScalarOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, ScalarEmit, Dst, Vector1, Vector2, FexcUpperZero(Node));    \
   }
 
 #define DEF_FMAOP_SCALAR_INSERT(FEXOp, ARMOp)                                                                                \
@@ -219,7 +220,7 @@ namespace FEXCore::CPU {
     const auto Vector2 = GetVReg(Op->Vector2);                                                                               \
     const auto Addend = GetVReg(Op->Addend);                                                                                 \
                                                                                                                              \
-    VFScalarFMAOperation(IROp->Size, ElementSize, ScalarEmit, Dst, Upper, Vector1, Vector2, Addend);                         \
+    VFScalarFMAOperation(IROp->Size, ElementSize, ScalarEmit, Dst, Upper, Vector1, Vector2, Addend, FexcUpperZero(Node));    \
   }
 
 DEF_UNOP(VAbs, abs, true)
@@ -265,8 +266,13 @@ DEF_FMAOP_SCALAR_INSERT(VFNMLSScalarInsert, fnmadd)
 
 void Arm64JITCore::VFScalarFMAOperation(IR::OpSize OpSize, IR::OpSize ElementSize, ScalarFMAOpCaller ScalarEmit, ARMEmitter::VRegister Dst,
                                         ARMEmitter::VRegister Upper, ARMEmitter::VRegister Vector1, ARMEmitter::VRegister Vector2,
-                                        ARMEmitter::VRegister Addend) {
+                                        ARMEmitter::VRegister Addend, bool UpperZero) {
   LOGMAN_THROW_A_FMT(OpSize == IR::OpSize::i128Bit, "256-bit unsupported", __func__);
+  if (UpperZero) {
+    // natemu slice1 (no AFP): Upper is zero above the element (FexcUpperZero), so the scalar write is the whole result
+    ScalarEmit(Dst, Vector1, Vector2, Addend);
+    return;
+  }
 
   LOGMAN_THROW_A_FMT(ElementSize == IR::OpSize::i16Bit || ElementSize == IR::OpSize::i32Bit || ElementSize == IR::OpSize::i64Bit, "Invalid "
                                                                                                                                   "size");
@@ -299,15 +305,25 @@ void Arm64JITCore::VFScalarFMAOperation(IR::OpSize OpSize, IR::OpSize ElementSiz
   }
 }
 
+bool Arm64JITCore::FexcUpperZero(IR::Ref Node) const {
+  return fexc_slice1 && !HostSupportsAFP && FexcPrecision::UpperZeroOps.count(Node);
+}
+
 // VFScalarOperation performs the operation described through ScalarEmit between Vector1 and Vector2,
 // storing it into Dst. This is a scalar operation, so the only lowest element of each vector is used for the operation.
 // The result is stored into the destination. The untouched bits of the destination come from Vector1, unless it's a 256 vector
 // and ZeroUpperBits is true, in which case the upper bits are zero.
 void Arm64JITCore::VFScalarOperation(IR::OpSize OpSize, IR::OpSize ElementSize, bool ZeroUpperBits, ScalarBinaryOpCaller ScalarEmit,
-                                     ARMEmitter::VRegister Dst, ARMEmitter::VRegister Vector1, ARMEmitter::VRegister Vector2) {
+                                     ARMEmitter::VRegister Dst, ARMEmitter::VRegister Vector1, ARMEmitter::VRegister Vector2,
+                                     bool UpperZero) {
   const auto Is256Bit = OpSize == IR::OpSize::i256Bit;
   LOGMAN_THROW_A_FMT(!Is256Bit || HostSupportsSVE256, "Need SVE256 support in order to use {} with 256-bit operation", __func__);
   LOGMAN_THROW_A_FMT(Is256Bit || !ZeroUpperBits, "128-bit operation doesn't support ZeroUpperBits in {}", __func__);
+  if (UpperZero) {
+    // natemu slice1 (no AFP): Vector1 is zero above the element (FexcUpperZero), so the scalar write is the whole result
+    ScalarEmit(Dst, Vector1, Vector2);
+    return;
+  }
 
   // Bit of a tricky detail.
   // The upper bits of the destination comes from Vector1.
@@ -378,10 +394,15 @@ void Arm64JITCore::VFScalarOperation(IR::OpSize OpSize, IR::OpSize ElementSize, 
 // and ZeroUpperBits is true, in which case the upper bits are zero.
 void Arm64JITCore::VFScalarUnaryOperation(IR::OpSize OpSize, IR::OpSize ElementSize, bool ZeroUpperBits, ScalarUnaryOpCaller ScalarEmit,
                                           ARMEmitter::VRegister Dst, ARMEmitter::VRegister Vector1,
-                                          std::variant<ARMEmitter::VRegister, ARMEmitter::Register> Vector2) {
+                                          std::variant<ARMEmitter::VRegister, ARMEmitter::Register> Vector2, bool UpperZero) {
   const auto Is256Bit = OpSize == IR::OpSize::i256Bit;
   LOGMAN_THROW_A_FMT(!Is256Bit || HostSupportsSVE256, "Need SVE256 support in order to use {} with 256-bit operation", __func__);
   LOGMAN_THROW_A_FMT(Is256Bit || !ZeroUpperBits, "128-bit operation doesn't support ZeroUpperBits in {}", __func__);
+  if (UpperZero) {
+    // natemu slice1 (no AFP): Vector1 is zero above the element (FexcUpperZero), so the scalar write is the whole result
+    ScalarEmit(Dst, Vector2);
+    return;
+  }
 
   LOGMAN_THROW_A_FMT(ElementSize == IR::OpSize::i16Bit || ElementSize == IR::OpSize::i32Bit || ElementSize == IR::OpSize::i64Bit, "Invalid "
                                                                                                                                   "size");
@@ -474,7 +495,7 @@ DEF_OP(VFMinScalarInsert) {
   const auto Vector1 = GetVReg(Op->Vector1);
   const auto Vector2 = GetVReg(Op->Vector2);
 
-  VFScalarOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, ScalarEmit, Dst, Vector1, Vector2);
+  VFScalarOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, ScalarEmit, Dst, Vector1, Vector2, FexcUpperZero(Node));
 }
 
 DEF_OP(VFMaxScalarInsert) {
@@ -500,7 +521,7 @@ DEF_OP(VFMaxScalarInsert) {
   const auto Vector1 = GetVReg(Op->Vector1);
   const auto Vector2 = GetVReg(Op->Vector2);
 
-  VFScalarOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, ScalarEmit, Dst, Vector1, Vector2);
+  VFScalarOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, ScalarEmit, Dst, Vector1, Vector2, FexcUpperZero(Node));
 }
 
 DEF_OP(VFSqrtScalarInsert) {
@@ -519,7 +540,7 @@ DEF_OP(VFSqrtScalarInsert) {
   const auto Vector1 = GetVReg(Op->Vector1);
   const auto Vector2 = GetVReg(Op->Vector2);
 
-  VFScalarUnaryOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, ScalarEmit, Dst, Vector1, Vector2);
+  VFScalarUnaryOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, ScalarEmit, Dst, Vector1, Vector2, FexcUpperZero(Node));
 }
 
 DEF_OP(VFRSqrtScalarInsert) {
@@ -557,7 +578,8 @@ DEF_OP(VFRSqrtScalarInsert) {
   const auto Vector1 = GetVReg(Op->Vector1);
   const auto Vector2 = GetVReg(Op->Vector2);
 
-  VFScalarUnaryOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, Handlers[HandlerIndex], Dst, Vector1, Vector2);
+  VFScalarUnaryOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, Handlers[HandlerIndex], Dst, Vector1, Vector2,
+                         FexcUpperZero(Node));
 }
 
 DEF_OP(VFRecpScalarInsert) {
@@ -594,7 +616,8 @@ DEF_OP(VFRecpScalarInsert) {
   const auto Vector1 = GetVReg(Op->Vector1);
   const auto Vector2 = GetVReg(Op->Vector2);
 
-  VFScalarUnaryOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, Handlers[HandlerIndex], Dst, Vector1, Vector2);
+  VFScalarUnaryOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, Handlers[HandlerIndex], Dst, Vector1, Vector2,
+                         FexcUpperZero(Node));
 }
 
 DEF_OP(VFToFScalarInsert) {
@@ -640,7 +663,7 @@ DEF_OP(VFToFScalarInsert) {
   const auto Vector1 = GetVReg(Op->Vector1);
   const auto Vector2 = GetVReg(Op->Vector2);
 
-  VFScalarUnaryOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, ScalarEmit, Dst, Vector1, Vector2);
+  VFScalarUnaryOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, ScalarEmit, Dst, Vector1, Vector2, FexcUpperZero(Node));
 }
 
 DEF_OP(VSToFVectorInsert) {
@@ -676,7 +699,8 @@ DEF_OP(VSToFVectorInsert) {
   // Might be scalar 8-byte (cvtsi2ss xmm0, rax)
   // Might be vector i32v2 (cvtpi2ps xmm0, mm0)
   if (!HasTwoElements) {
-    VFScalarUnaryOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, ScalarEmit, Dst, Vector1, Vector2);
+    VFScalarUnaryOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, ScalarEmit, Dst, Vector1, Vector2,
+                           FexcUpperZero(Node));
     return;
   }
 
@@ -745,7 +769,7 @@ DEF_OP(VSToFGPRInsert) {
   const auto Vector = GetVReg(Op->Vector);
   const auto GPR = GetReg(Op->Src);
 
-  VFScalarUnaryOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, ScalarEmit, Dst, Vector, GPR);
+  VFScalarUnaryOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, ScalarEmit, Dst, Vector, GPR, FexcUpperZero(Node));
 }
 
 DEF_OP(VFToIScalarInsert) {
@@ -778,7 +802,7 @@ DEF_OP(VFToIScalarInsert) {
   const auto Vector1 = GetVReg(Op->Vector1);
   const auto Vector2 = GetVReg(Op->Vector2);
 
-  VFScalarUnaryOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, ScalarEmit, Dst, Vector1, Vector2);
+  VFScalarUnaryOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, ScalarEmit, Dst, Vector1, Vector2, FexcUpperZero(Node));
   if (FexcX) FexcRoundEnd(RoundMode);
 }
 
@@ -939,7 +963,8 @@ DEF_OP(VFCMPScalarInsert) {
   const auto Vector1 = GetVReg(Op->Vector1);
   const auto Vector2 = GetVReg(Op->Vector2);
 
-  VFScalarOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, Funcs[FEXCore::ToUnderlying(Op->Op)], Dst, Vector1, Vector2);
+  VFScalarOperation(IROp->Size, ElementSize, Op->ZeroUpperBits, Funcs[FEXCore::ToUnderlying(Op->Op)], Dst, Vector1, Vector2,
+                    FexcUpperZero(Node));   // (never for UNO, NEQ and ORD: they insert into Dst themselves)
 }
 
 DEF_OP(VectorImm) {

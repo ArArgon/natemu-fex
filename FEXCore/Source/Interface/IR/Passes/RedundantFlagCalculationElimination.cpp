@@ -706,6 +706,7 @@ void DeadFlagCalculationEliminination::Run(IREmitter* IREmit) {
     FexcPrecision::PlaceFlushes(IREmit);   // natemu slice1 (AFP fallback chunk 3a): software DAZ/FTZ flushes, before the checks
     FexcPrecision::PlaceFmaSanitize(IREmit);   // natemu slice1 (AFP fallback chunk 3b, row 10): no spurious IE from inf*0 + QNaN
     FexcPrecision::PlaceFPChecks(IREmit);   // natemu slice1 (I5c): unmasked floating-point exception checks (fault points)
+    FexcPrecision::MarkUpperZero(IREmit);   // natemu slice1 (no AFP): the scalar ops whose upper bits are known zero, after the rewrites
   }
 
   auto CurrentIR = IREmit->ViewIR();
