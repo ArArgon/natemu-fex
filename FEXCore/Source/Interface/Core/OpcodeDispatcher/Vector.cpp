@@ -3568,6 +3568,11 @@ void OpDispatchBuilder::MOVQ2DQ(OpcodeArgs, bool ToXMM) {
 }
 
 Ref OpDispatchBuilder::ADDSUBPOpImpl(OpSize Size, IR::OpSize ElementSize, Ref Src1, Ref Src2) {
+  if (fexc_slice1 && !CTX->HostFeatures.SupportsAFP) {
+    // natemu slice1 (no AFP): the JIT negates the even lanes of Src2 by `fmul` (a NaN keeps its sign, as in x86) and adds: Rotate 0 is
+    // that lowering, on the source as it is (no swap).
+    return _VFCADD(Size, ElementSize, Src1, Src2, 0);
+  }
   if (CTX->HostFeatures.SupportsFCMA) {
     if (ElementSize == OpSize::i32Bit) {
       auto Swizzle = _VRev64(Size, OpSize::i32Bit, Src2);
