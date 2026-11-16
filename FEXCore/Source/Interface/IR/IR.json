@@ -2917,10 +2917,11 @@
         "HasSideEffects": true
       },
       "FexcKeep FPR:$Value, u32:$Tag": {
-        "Desc": ["natemu slice1 (AFP fallback, tininess after rounding): emits no code. It uses $Value, so $Value's register is not reused",
-                 "before the check that follows (the resident reads the operands of the instruction's multiplies, divides, FMAs and",
+        "Desc": ["natemu slice1 (AFP fallback, tininess after rounding): emits no code. It uses $Value, so $Value stays live",
+                 "up to the check that follows (the resident reads the operands of the instruction's multiplies, divides, FMAs and",
                  "narrowing conversions from the registers at the check's stub), and the JIT records $Tag with the register for that",
-                 "check's site. Placed only without FEAT_AFP and with MXCSR.UM clear"
+                 "check's site. In a block with spill slots a fill between two FexcKeeps could take a register an earlier one named, so",
+                 "there the JIT records nothing (the check keeps its old behaviour). Placed only without FEAT_AFP and with MXCSR.UM clear"
                 ],
         "HasSideEffects": true
       },

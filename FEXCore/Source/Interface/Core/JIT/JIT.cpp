@@ -940,7 +940,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
   DebugData->FexcEntryPrologues.clear();
   FexcGuest = FexcInsnNative = 0; FexcCf = true; FexcNzcvWritten = FexcNzcvSaved = FexcStoreSeen = false; FexcLoadSite = -1; FexcPendingFused.clear();
   fexc_dispatch_exits.clear();
-  FexcStubs.clear(); FexcPendingLink.clear(); FexcTargetsDone = 0;
+  FexcStubs.clear(); FexcPendingLink.clear(); FexcTargetsDone = 0; FexcKeepList.clear();
   DebugData->GuestOpcodes.clear(); DebugData->Subblocks.clear();   // natemu: per attempt (a far-branch restart re-emits them)
   JumpTargets.clear();
   CallReturnTargets.clear();
