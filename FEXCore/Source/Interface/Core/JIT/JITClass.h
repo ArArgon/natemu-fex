@@ -559,6 +559,7 @@ private:
   bool FexcQuietOp(const IR::IROp_Header* IROp);
   // natemu (fexc), profile slice1 (I6): x87 floating-point ops: FPSR into the x87 exception word, the x87 FPCR (shim/fexc_sites.inc).
   bool FexcX87Op(const IR::IROp_Header* IROp);
+  bool FexcX87NanOp(const IR::IROp_Header* IROp);   // AFP fallback: the x87 arithmetic ops whose NaN result gets a fix-up without AFP
   void FexcX87Begin();
   // natemu (fexc), profile slice1 (I5c): the #MF check of a waiting instruction and the exact-tiny underflow test (shim/fexc_sites.inc).
   void FexcPendingCheck();
