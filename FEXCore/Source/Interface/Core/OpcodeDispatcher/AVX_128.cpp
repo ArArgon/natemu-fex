@@ -2084,22 +2084,32 @@ void OpDispatchBuilder::AVX128_VFMAddSubImpl(OpcodeArgs, bool AddSub, uint8_t Sr
 
   RefPair Result {};
 
+  const bool FexcNoAFP = fexc_slice1 && !CTX->HostFeatures.SupportsAFP;
   Ref ConstantEOR {};
-  if (AddSub) {
-    ConstantEOR = LoadAndCacheNamedVectorConstant(
-      OpSize::i128Bit, ElementSize == OpSize::i32Bit ? NAMED_VECTOR_PADDSUBPS_INVERT : NAMED_VECTOR_PADDSUBPD_INVERT);
-  } else {
-    ConstantEOR = LoadAndCacheNamedVectorConstant(
-      OpSize::i128Bit, ElementSize == OpSize::i32Bit ? NAMED_VECTOR_PSUBADDPS_INVERT : NAMED_VECTOR_PSUBADDPD_INVERT);
+  if (!FexcNoAFP) {
+    if (AddSub) {
+      ConstantEOR = LoadAndCacheNamedVectorConstant(
+        OpSize::i128Bit, ElementSize == OpSize::i32Bit ? NAMED_VECTOR_PADDSUBPS_INVERT : NAMED_VECTOR_PADDSUBPD_INVERT);
+    } else {
+      ConstantEOR = LoadAndCacheNamedVectorConstant(
+        OpSize::i128Bit, ElementSize == OpSize::i32Bit ? NAMED_VECTOR_PSUBADDPS_INVERT : NAMED_VECTOR_PSUBADDPD_INVERT);
+    }
   }
   // natemu slice1 (I8): the subtracted lanes' addend negated by fneg, which keeps a NaN's sign under FPCR.AH = 1 (x86 returns
   // the NaN operand itself); FEX's XOR with the sign mask flipped it. The lanes come from the sign mask.
   auto FexcNegate = [&](Ref Addend) -> Ref {
-    Ref Lanes = _VSShrI(OpSize::i128Bit, ElementSize, ConstantEOR, ElementSize == OpSize::i32Bit ? 31 : 63);
-    if (!CTX->HostFeatures.SupportsAFP) {   // (no AFP: the subtracted lanes by a multiply by the cached -1.0, a NaN keeping its sign; the added lanes untouched)
-      auto Minus = _VFMul(OpSize::i128Bit, ElementSize, Addend, LoadAndCacheNamedVectorConstant(OpSize::i128Bit, ElementSize == OpSize::i32Bit ? NAMED_VECTOR_NEG_ONE_PS : NAMED_VECTOR_NEG_ONE_PD));
-      return _VBSL(OpSize::i128Bit, Lanes, Minus, Addend);
+    if (FexcNoAFP) {
+      // no AFP: the subtracted lanes (even for ADDSUB, odd for SUBADD) come from a multiply by the cached -1.0 (a NaN keeps its sign, an SNaN is
+      // quieted: a documented difference), inserted into the untouched addend: the added lanes reach the FMA as they are
+      Ref Result = Addend;
+      Ref Minus = _VFMul(OpSize::i128Bit, ElementSize, Addend,
+                         LoadAndCacheNamedVectorConstant(OpSize::i128Bit, ElementSize == OpSize::i32Bit ? NAMED_VECTOR_NEG_ONE_PS : NAMED_VECTOR_NEG_ONE_PD));
+      for (uint32_t Lane = AddSub ? 0 : 1; Lane < (ElementSize == OpSize::i32Bit ? 4u : 2u); Lane += 2) {
+        Result = _VInsElement(OpSize::i128Bit, ElementSize, Lane, Lane, Result, Minus);
+      }
+      return Result;
     }
+    Ref Lanes = _VSShrI(OpSize::i128Bit, ElementSize, ConstantEOR, ElementSize == OpSize::i32Bit ? 31 : 63);
     return _VBSL(OpSize::i128Bit, Lanes, _VFNeg(OpSize::i128Bit, ElementSize, Addend), Addend);
   };
   auto InvertedSourceLow = fexc_slice1 ? FexcNegate(Sources[AddendIdx - 1].Low) : _VXor(OpSize::i128Bit, Sources[AddendIdx - 1].Low, ConstantEOR);
