@@ -2103,14 +2103,11 @@ void OpDispatchBuilder::AVX128_VFMAddSubImpl(OpcodeArgs, bool AddSub, uint8_t Sr
       // quieted: a documented difference), inserted into the untouched addend: the added lanes reach the FMA as they are
       Ref Minus = _VFMul(OpSize::i128Bit, ElementSize, Addend,
                          LoadAndCacheNamedVectorConstant(OpSize::i128Bit, ElementSize == OpSize::i32Bit ? NAMED_VECTOR_NEG_ONE_PS : NAMED_VECTOR_NEG_ONE_PD));
-      Ref Result {};
-      if (ElementSize == OpSize::i64Bit) {
-        Result = _VInsElement(OpSize::i128Bit, ElementSize, AddSub ? 0 : 1, AddSub ? 0 : 1, Addend, Minus);
-      } else if (AddSub) {   // (m0, a1, m2, a3): the even lanes of Minus and of the pair-swapped addend
-        Result = _VTrn(OpSize::i128Bit, ElementSize, Minus, _VRev64(OpSize::i128Bit, ElementSize, Addend));
-      } else {               // (a0, m1, a2, m3)
-        Result = _VTrn(OpSize::i128Bit, ElementSize, Addend, _VRev64(OpSize::i128Bit, ElementSize, Minus));
-      }
+      auto Swap = [&](Ref V) {   // the neighbouring lanes' swap
+        return ElementSize == OpSize::i32Bit ? _VRev64(OpSize::i128Bit, OpSize::i32Bit, V) : _VExtr(OpSize::i128Bit, OpSize::i8Bit, V, V, 8);
+      };
+      // ADDSUB-style (m0, a1, m2, a3): the even lanes of Minus and of the swapped addend; SUBADD (a0, m1, a2, m3)
+      Ref Result = AddSub ? _VTrn(OpSize::i128Bit, ElementSize, Minus, Swap(Addend)) : _VTrn(OpSize::i128Bit, ElementSize, Addend, Swap(Minus));
       return Result;
     }
     Ref Lanes = _VSShrI(OpSize::i128Bit, ElementSize, ConstantEOR, ElementSize == OpSize::i32Bit ? 31 : 63);
