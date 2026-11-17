@@ -2936,6 +2936,15 @@
         "Desc": ["natemu slice1 (AFP accurate plan, chunk 2, B): the end of the span FexcSimdSkip opened (the branch's target)"],
         "HasSideEffects": true
       },
+      "FexcFmaCheck FPR:$Result, FPR:$Vector1, FPR:$Vector2, FPR:$Addend, u32:$Mode": {
+        "Desc": ["natemu slice1 (AFP accurate plan, chunk 4, A): the NaN check of a fused multiply-add on a host without FEAT_AFP, placed right after",
+                 "the FMA: a signalling compare of $Result (lane 0 for a scalar op, $Mode bit 4) with zero into VTMP2, which raises an invalid",
+                 "operation for any NaN lane, so the resident's FPCR.IOE trap is taken at it and recomputes the NaN lanes from $Vector1, $Vector2",
+                 "and $Addend (kept live up to here, with $Result: the guest register is written only after the check) by x86's choice order, then",
+                 "resumes after it. $Mode: bit 3 8-byte elements, bit 4 scalar. The JIT records a site (kind FMA) at the compare: width = $Mode,",
+                 "imm = the three operand registers, five bits each. The destination is never read; admission pins it"],
+        "HasSideEffects": true
+      },
       "FexcKeep FPR:$Value, u32:$Tag": {
         "Desc": ["natemu slice1 (AFP fallback, tininess after rounding): emits no code. It uses $Value, so $Value stays live",
                  "up to the check that follows (the resident reads the operands of the instruction's multiplies, divides, FMAs and",

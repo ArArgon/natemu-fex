@@ -705,6 +705,7 @@ void DeadFlagCalculationEliminination::Run(IREmitter* IREmit) {
   if (fexc_slice1) {
     FexcPrecision::PlaceFlushes(IREmit);   // natemu slice1 (AFP fallback chunk 3a): software DAZ/FTZ flushes, before the checks
     FexcPrecision::PlaceFmaSanitize(IREmit);   // natemu slice1 (AFP fallback chunk 3b, row 10): no spurious IE from inf*0 + QNaN
+    FexcPrecision::PlaceFmaChecks(IREmit);   // natemu slice1 (AFP accurate chunk 4): the NaN check of each FMA, accurate mode without AFP
     FexcPrecision::PlaceFPChecks(IREmit);   // natemu slice1 (I5c): unmasked floating-point exception checks (fault points)
     FexcPrecision::MarkUpperZero(IREmit);   // natemu slice1 (no AFP): the scalar ops whose upper bits are known zero, after the rewrites
   }
