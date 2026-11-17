@@ -2101,11 +2101,15 @@ void OpDispatchBuilder::AVX128_VFMAddSubImpl(OpcodeArgs, bool AddSub, uint8_t Sr
     if (FexcNoAFP) {
       // no AFP: the subtracted lanes (even for ADDSUB, odd for SUBADD) come from a multiply by the cached -1.0 (a NaN keeps its sign, an SNaN is
       // quieted: a documented difference), inserted into the untouched addend: the added lanes reach the FMA as they are
-      Ref Result = Addend;
       Ref Minus = _VFMul(OpSize::i128Bit, ElementSize, Addend,
                          LoadAndCacheNamedVectorConstant(OpSize::i128Bit, ElementSize == OpSize::i32Bit ? NAMED_VECTOR_NEG_ONE_PS : NAMED_VECTOR_NEG_ONE_PD));
-      for (uint32_t Lane = AddSub ? 0 : 1; Lane < (ElementSize == OpSize::i32Bit ? 4u : 2u); Lane += 2) {
-        Result = _VInsElement(OpSize::i128Bit, ElementSize, Lane, Lane, Result, Minus);
+      Ref Result {};
+      if (ElementSize == OpSize::i64Bit) {
+        Result = _VInsElement(OpSize::i128Bit, ElementSize, AddSub ? 0 : 1, AddSub ? 0 : 1, Addend, Minus);
+      } else if (AddSub) {   // (m0, a1, m2, a3): the even lanes of Minus and of the pair-swapped addend
+        Result = _VTrn(OpSize::i128Bit, ElementSize, Minus, _VRev64(OpSize::i128Bit, ElementSize, Addend));
+      } else {               // (a0, m1, a2, m3)
+        Result = _VTrn(OpSize::i128Bit, ElementSize, Addend, _VRev64(OpSize::i128Bit, ElementSize, Minus));
       }
       return Result;
     }
