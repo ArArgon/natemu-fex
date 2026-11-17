@@ -12,6 +12,7 @@ $end_info$
 #include "Interface/Context/Context.h"
 #include "Interface/Core/ArchHelpers/Arm64Emitter.h"
 #include "Interface/Core/CPUID.h"
+#include "Interface/Core/Interpreter/InterpreterOps.h"
 #include "Interface/Core/JIT/JITClass.h"
 #include "Interface/IR/RegisterAllocationData.h"
 #include <FEXCore/Utils/CompilerDefs.h>

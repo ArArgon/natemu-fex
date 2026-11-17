@@ -543,6 +543,8 @@ private:
   // natemu (fexc), profile slice1: address guard, split-store check and branch-target check, with out-of-line brk stubs
   // whose PCs are guard/split sites (same file).
   void FexcBeforeOp(const IR::IROp_Header* IROp, IR::Ref Node);
+  void FexcHoistPlan();   // natemu: shim/fexc_sites.inc, the SIMD DE screen's hoisted constants
+  void FexcHoistEmit();
   void FexcCheckTarget(IR::Ref Node);
   void FexcEmitStubs();
   ARMEmitter::ForwardLabel* FexcStub(uint8_t Kind, bool Link);

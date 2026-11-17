@@ -1002,6 +1002,8 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
   PendingTargetLabel = nullptr;
   PendingCallReturnTargetLabel = nullptr;
 
+  if (fexc_slice1) FexcHoistPlan();   // natemu: the per-unit constants of the SIMD DE screen (shim/fexc_sites.inc)
+
   for (auto [BlockNode, BlockHeader] : IR->GetBlocks()) {
     auto BlockIROp = BlockHeader->CW<FEXCore::IR::IROp_CodeBlock>();
 #if defined(ASSERTIONS_ENABLED) && ASSERTIONS_ENABLED
@@ -1041,6 +1043,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
 
         EmitEntryPoint(JITCodeHeaderLabel, CheckTF);
         DebugData->FexcEntryPrologues.push_back({BlockIROp->GuestEntryOffset, uint64_t(GetCursorAddress<uint8_t*>() - CodeData.BlockBegin)});
+        if (fexc_slice1) FexcHoistEmit();   // natemu: after the prologue record, so the constants are body words
       }
 
       if (PendingCallReturnTargetLabel) {
