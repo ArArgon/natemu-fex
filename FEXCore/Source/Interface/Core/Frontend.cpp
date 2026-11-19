@@ -1185,6 +1185,16 @@ Decoder::DecodedBlockStatus Decoder::DecodeInstruction(uint64_t PC) {
 
 void Decoder::BranchTargetInMultiblockRange() {
   if (!CTX->Config.Multiblock) {
+    // natemu experiment (extended blocks): continue with a conditional branch's fall-through in the same unit (forward
+    // only, the entry's page, at most fexc_ext_conds conditional branches); the taken edge stays an exit (slice1).
+    const uint8_t Op = DecodeInst->OPRaw;
+    const bool Cond = (DecodeInst->FexcMap == FEXC_MAP_PRIMARY && ((Op >= 0x70 && Op <= 0x7F) || (Op >= 0xE0 && Op <= 0xE3))) ||
+                      (DecodeInst->FexcMap == FEXC_MAP_TWO && Op >= 0x80 && Op <= 0x8F);
+    const uint64_t InstEnd = DecodeInst->PC + DecodeInst->InstSize;
+    if (fexc_slice1 && fexc_ext_conds > 0 && Cond && BlockInfo.Blocks.size() < size_t(fexc_ext_conds) &&
+        (InstEnd >> 12) == (EntryPoint >> 12)) {
+      AddBranchTarget(InstEnd);
+    }
     return;
   }
 

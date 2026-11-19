@@ -613,9 +613,12 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
         TableInfo = Block.DecodedInstructions[i].TableInfo;
         DecodedInfo = &Block.DecodedInstructions[i];
 
-        if (fexc_slice1 && FexcSlice1::Cut(Block.BlockStatus, i + 1 == InstsInBlock, BlockInstructionsLength == 0, *DecodedInfo, InstAddress,
+        if (fexc_slice1 && FexcSlice1::Cut(Block.BlockStatus, i + 1 == InstsInBlock, InstAddress == GuestRIP, *DecodedInfo, InstAddress,
                                              i + 1 < InstsInBlock ? &Block.DecodedInstructions[i + 1] : nullptr, i + 2 == InstsInBlock)) {
-          if (!BlockInstructionsLength) {
+          // natemu experiment (extended blocks): a cut inside a non-final decoded block: fexc compiles again with the unit
+          // ending there (fexc_ext_stop), so this attempt's code is dropped.
+          if (j + 1 < CodeBlocks.size() && fexc_ext_stop < 0) fexc_ext_stop = int(BlockInstructionsLength ? j : j - 1);
+          if (InstAddress == GuestRIP) {
             Thread->OpDispatcher->DelayedDisownBuffer();
             return {std::nullopt, 0, 0, 0, 0};
           }
@@ -778,6 +781,7 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
         }
 
         if (NeedsBlockEnd) {
+          if (j + 1 < CodeBlocks.size() && fexc_ext_stop < 0) fexc_ext_stop = int(j);   // natemu experiment (extended blocks)
           // We had some instructions. Early exit
           Thread->OpDispatcher->ExitFunction(
             Thread->OpDispatcher->_InlineEntrypointOffset(GPRSize, Block.Entry + BlockInstructionsLength - GuestRIP));
@@ -786,6 +790,7 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
 
 
         if (Thread->OpDispatcher->FinishOp(DecodedInfo->PC + DecodedInfo->InstSize, i + 1 == InstsInBlock)) {
+          if (i + 1 < InstsInBlock && j + 1 < CodeBlocks.size() && fexc_ext_stop < 0) fexc_ext_stop = int(j);   // natemu experiment
           break;
         }
       }
