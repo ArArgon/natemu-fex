@@ -347,7 +347,9 @@ Ref OpDispatchBuilder::CalculateFlags_SUB(IR::OpSize SrcSize, Ref Src1, Ref Src2
   if (SrcSize >= OpSize::i32Bit) {
     Res = SubWithFlags(SrcSize, Src1, Src2);
   } else {
-    _SubNZCV(SrcSize, Src1, Src2);
+    uint64_t Const;
+    // natemu FEXC_NARROW_CMP: the constant inline (JIT SubNZCV: no materialised constant, no shift of the operand).
+    _SubNZCV(SrcSize, Src1, fexc_narrow_cmp && IsValueConstant(WrapNode(Src2), &Const) ? _InlineConstant(Const) : Src2);
     Res = Sub(OpSize::i32Bit, Src1, Src2);
   }
 

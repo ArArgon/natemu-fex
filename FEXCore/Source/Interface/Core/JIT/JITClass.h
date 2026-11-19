@@ -587,6 +587,7 @@ private:
   uint32_t FexcGuest {}, FexcInsnNative {};
   bool FexcCf {true}, FexcNzcvWritten {}, FexcNzcvSaved {}, FexcStoreSeen {};
   int FexcLoadSite {-1};
+  uint32_t FexcAlignedMask {};   // natemu --push-run: the registers known 8-byte aligned here (shim/fexc_sites.inc FexcAlignedAfter)
   fextl::vector<size_t> FexcPendingFused;
   /**
    * @name Relocations

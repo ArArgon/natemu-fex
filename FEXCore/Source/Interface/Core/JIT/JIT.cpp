@@ -1056,6 +1056,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
       BindOrRestart(Target);
     }
 
+    FexcAlignedMask = 0;   // natemu --push-run: a block start may be a branch target
     for (auto [CodeNode, IROp] : IR->GetCode(BlockNode)) {
       FexcEnsureRoom(0);
       if (fexc_slice1) FexcBeforeOp(IROp, CodeNode);
