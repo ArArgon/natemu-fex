@@ -587,8 +587,7 @@ private:
   uint32_t FexcGuest {}, FexcInsnNative {};
   bool FexcCf {true}, FexcNzcvWritten {}, FexcNzcvSaved {}, FexcStoreSeen {};
   int FexcLoadSite {-1};
-  int FexcAlignedReg {-1};   // natemu FEXC_PUSH_RUN: a register known 8-byte aligned since its alignment check (-1: none)
-  bool FexcMultiInsn {};     // natemu FEXC_PUSH_RUN: the unit holds more than one guest instruction (never a step block)
+  uint32_t FexcAlignedMask {};   // natemu --push-run: the registers known 8-byte aligned here (shim/fexc_sites.inc FexcAlignedAfter)
   fextl::vector<size_t> FexcPendingFused;
   /**
    * @name Relocations
