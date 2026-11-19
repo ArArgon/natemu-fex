@@ -946,6 +946,25 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
   CallReturnTargets.clear();
   PendingJumpThunks.clear();
   JumpTargets.resize(IR->GetHeader()->BlockCount, {});
+  // natemu --push-run: which IR blocks may take the aligned registers their jumps carry (forward jumps only, no entry point).
+  FexcCarried.assign(IR->GetHeader()->BlockCount, {});
+  if (fexc_slice1 && fexc_push_run) {
+    uint32_t Order = 0;
+    fextl::vector<uint32_t> At(IR->GetHeader()->BlockCount, ~0u);
+    for (auto [BlockNode, BlockHeader] : IR->GetBlocks()) At[BlockHeader->C<IR::IROp_CodeBlock>()->ID] = Order++;
+    for (auto [BlockNode, BlockHeader] : IR->GetBlocks()) {
+      const auto B = BlockHeader->C<IR::IROp_CodeBlock>();
+      if (B->EntryPoint) FexcCarried[B->ID].Bad = true;
+      for (auto [Node, IROp] : IR->GetCode(BlockNode)) {
+        const auto Mark = [&](IR::OrderedNodeWrapper T) {
+          const auto Id = IR->GetOp<IR::IROp_CodeBlock>(T)->ID;
+          if (At[Id] <= At[B->ID]) FexcCarried[Id].Bad = true;
+        };
+        if (IROp->Op == IR::OP_JUMP) Mark(IROp->C<IR::IROp_Jump>()->TargetBlock);
+        if (IROp->Op == IR::OP_CONDJUMP) { Mark(IROp->C<IR::IROp_CondJump>()->TrueBlock); Mark(IROp->C<IR::IROp_CondJump>()->FalseBlock); }
+      }
+    }
+  }
   Relocations.resize(PrevNumAllocations, FEXCore::CPU::Relocation::Default()); // Discard any relocations generated from a previous attempt
 
   CodeData.EntryPoints.clear();
@@ -1056,7 +1075,10 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
       BindOrRestart(Target);
     }
 
-    FexcAlignedMask = 0;   // natemu --push-run: a block start may be a branch target
+    {   // natemu --push-run: what the jumps to this block carry (each one's set at its jump), else nothing
+      const auto& C = FexcCarried[BlockIROp->ID];
+      FexcAlignedMask = !C.Bad && C.Seen ? C.Mask : 0;
+    }
     for (auto [CodeNode, IROp] : IR->GetCode(BlockNode)) {
       FexcEnsureRoom(0);
       if (fexc_slice1) FexcBeforeOp(IROp, CodeNode);

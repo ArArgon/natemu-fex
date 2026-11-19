@@ -587,6 +587,11 @@ private:
   uint32_t FexcGuest {}, FexcInsnNative {};
   bool FexcCf {true}, FexcNzcvWritten {}, FexcNzcvSaved {}, FexcStoreSeen {};
   int FexcLoadSite {-1};
+  // natemu --push-run: per IR block, the aligned registers its jumps carry to it (intersection) and whether one did; a block
+  // that is an entry point or the target of a jump from itself or a later block (emitted after its start) gets none.
+  struct FexcCarry { uint32_t Mask = ~0u; bool Seen = false, Bad = false; };
+  fextl::vector<FexcCarry> FexcCarried;
+  void FexcCarryJump(IR::OrderedNodeWrapper Target);
   uint32_t FexcAlignedMask {};   // natemu --push-run: the registers known 8-byte aligned here (shim/fexc_sites.inc FexcAlignedAfter)
   fextl::vector<size_t> FexcPendingFused;
   /**
