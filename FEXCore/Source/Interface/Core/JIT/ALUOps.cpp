@@ -253,7 +253,25 @@ DEF_OP(SubNZCV) {
   const auto EmitSize = ConvertSize(IROp);
 
   uint64_t Const;
-  if (IsInlineConstant(Op->Src2, &Const)) {
+  if (IsInlineConstant(Op->Src2, &Const) && OpSize < IR::OpSize::i32Bit) {
+    // natemu FEXC_NARROW_CMP: an 8/16-bit compare with a constant B (inlined by CalculateFlags_SUB). NZCV of
+    // (A << s) - (B << s) equal those of (B' << s) + (A << s) with B' = -B: N and Z (the same result), C (no borrow iff
+    // A << s >= B << s, the carry of adding 2^32 - (B << s)) and V (adding the negation is the subtraction) for every B but
+    // 0 (C differs) and the most negative (its negation overflows): those keep the shifted compare, with zr or a temporary.
+    const unsigned Shift = 32 - IR::OpSizeAsBits(OpSize);
+    const uint32_t B = uint32_t(Const << Shift);
+    const auto Src1 = GetZeroableReg(Op->Src1);
+    if (B != 0 && B != 0x8000'0000u) {
+      movz(ARMEmitter::Size::i32Bit, TMP1, (0u - B) >> 16, 16);
+      cmn(ARMEmitter::Size::i32Bit, TMP1, Src1, ARMEmitter::ShiftType::LSL, Shift);
+    } else {
+      auto Rm = ARMEmitter::Reg::zr;
+      if (B) { movz(ARMEmitter::Size::i32Bit, TMP2, B >> Shift); Rm = TMP2; }
+      auto Rn = Src1;
+      if (Src1 != ARMEmitter::Reg::zr) { lsl(ARMEmitter::Size::i32Bit, TMP1, Src1, Shift); Rn = TMP1; }
+      cmp(EmitSize, Rn, Rm, ARMEmitter::ShiftType::LSL, Shift);
+    }
+  } else if (IsInlineConstant(Op->Src2, &Const)) {
     LOGMAN_THROW_A_FMT(OpSize >= IR::OpSize::i32Bit, "Constant not allowed here");
     cmp(EmitSize, GetReg(Op->Src1), Const);
   } else {

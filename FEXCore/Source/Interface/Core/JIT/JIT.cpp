@@ -1002,7 +1002,13 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
   PendingTargetLabel = nullptr;
   PendingCallReturnTargetLabel = nullptr;
 
-  if (fexc_slice1) FexcHoistPlan();   // natemu: the per-unit constants of the SIMD DE screen (shim/fexc_sites.inc)
+  if (fexc_slice1) FexcHoistPlan();
+  if (fexc_slice1 && fexc_push_run) {   // natemu FEXC_PUSH_RUN: more than one guest instruction (a step block has one)
+    uint32_t Insns = 0;
+    for (auto [BlockNode, BlockHeader] : IR->GetBlocks())
+      for (auto [Node, IROp] : IR->GetCode(BlockNode)) Insns += IROp->Op == IR::OP_GUESTOPCODE;
+    FexcMultiInsn = Insns > 1;
+  }   // natemu: the per-unit constants of the SIMD DE screen (shim/fexc_sites.inc)
 
   for (auto [BlockNode, BlockHeader] : IR->GetBlocks()) {
     auto BlockIROp = BlockHeader->CW<FEXCore::IR::IROp_CodeBlock>();
@@ -1056,6 +1062,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
       BindOrRestart(Target);
     }
 
+    FexcAlignedReg = -1;   // natemu FEXC_PUSH_RUN: a block start may be a branch target
     for (auto [CodeNode, IROp] : IR->GetCode(BlockNode)) {
       FexcEnsureRoom(0);
       if (fexc_slice1) FexcBeforeOp(IROp, CodeNode);
