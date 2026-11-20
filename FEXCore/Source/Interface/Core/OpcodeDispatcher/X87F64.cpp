@@ -51,6 +51,10 @@ void OpDispatchBuilder::X87FLDCWF64(OpcodeArgs) {
   _StackForceSlow();
 
   Ref NewFCW = LoadSourceGPR(Op, Op->Src[0], Op->Flags);
+  if (fexc_slice1) {   // natemu slice1 (M2 task 4): no FPCR write here; a control word with other exception masks is the resident's
+    _FexcFldcw(NewFCW);
+    return;
+  }
   // ignore the rounding precision, we're always 64-bit in F64.
   // extract rounding mode
   Ref roundingMode = _Bfe(OpSize::i32Bit, 3, 10, NewFCW);
