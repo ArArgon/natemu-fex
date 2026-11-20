@@ -4245,8 +4245,10 @@ void OpDispatchBuilder::CreateJumpBlocks(const fextl::vector<FEXCore::Frontend::
   }
 }
 
+void FexcFild64Reset();
 void OpDispatchBuilder::BeginFunction(uint64_t RIP, const fextl::vector<FEXCore::Frontend::Decoder::DecodedBlocks>* Blocks,
                                       uint32_t NumInstructions, bool _Is64BitMode, bool MonoBackpatcherBlock) {
+  FexcFild64Reset();   // natemu slice1 (M2 task 4): X87F64.cpp
   Entry = RIP;
   Is64BitMode = _Is64BitMode;
   LOGMAN_THROW_A_FMT(Is64BitMode == CTX->Config.Is64BitMode, "Expected operating mode to not change at runtime!");

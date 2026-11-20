@@ -25,6 +25,14 @@ class OrderedNode;
 
 #define OpcodeArgs [[maybe_unused]] FEXCore::X86Tables::DecodedOp Op
 
+// natemu slice1 (M2 task 4, 64-bit integers through x87): the last FILD m64 of the IR block being built:
+// its block, the integer it loaded and its RIP. A FISTP/FISTTP m64 in the same block with no x87 or MMX instruction between
+// (other instructions do not touch the x87 stack) stores that integer itself: the pair is the 8-byte copy compilers use for
+// 64-bit atomic loads and stores on i686, exact on hardware (the 80-bit register holds every 64-bit integer) and not in
+// doubles. Forgotten at the next compile (BeginFunction).
+static struct { Ref Block; Ref Raw; uint64_t Rip; } FexcFild64 {};
+void FexcFild64Reset() { FexcFild64 = {}; }
+
 void OpDispatchBuilder::X87LDENVF64(OpcodeArgs) {
   _StackForceSlow();
 
@@ -110,11 +118,23 @@ void OpDispatchBuilder::FILDF64(OpcodeArgs) {
   }
   auto ConvertedData = _Float_FromGPR_S(OpSize::i64Bit, ReadWidth == OpSize::i32Bit ? OpSize::i32Bit : OpSize::i64Bit, Data);
   _PushStack(ConvertedData, Invalid(), OpSize::iInvalid);
+  if (fexc_slice1 && ReadWidth == OpSize::i64Bit) FexcFild64 = {GetCurrentBlock(), Data, Op->PC};
 }
 
 void OpDispatchBuilder::FISTF64(OpcodeArgs, bool Truncate) {
   const auto Size = OpSizeFromSrc(Op);
 
+  if (fexc_slice1 && Size == OpSize::i64Bit && FexcFild64.Raw && FexcFild64.Block == GetCurrentBlock() && FexcFild64.Rip < Op->PC &&
+      (Op->TableInfo->Flags & X86Tables::InstFlags::FLAGS_POP) != 0) {
+    // ST(0) is the FILD's value untouched when no x87 or MMX instruction lies between the two.
+    const auto Next = [&](const auto& S) { const auto It = S.upper_bound(FexcFild64.Rip); return It == S.end() ? ~0ull : *It; };
+    if (Next(fexc_x87) >= Op->PC && Next(fexc_x87_waiting) >= Op->PC) {
+      StoreResultGPR_WithOpSize(Op, Op->Dest, FexcFild64.Raw, Size, OpSize::i8Bit, MemoryAccessType::NONTSO);
+      _PopStackDestroy();
+      FexcFild64 = {};
+      return;
+    }
+  }
   if (fexc_slice1) {
     // natemu slice1 (I6): x86's FIST/FISTP/FISTTP (SDM Vol.2): round by FCW.RC (`frintx`: PE when inexact; the x87 FPCR) or
     // truncate (`fcvtzs`: PE when inexact), then store the integer, or the integer indefinite (the operand size's smallest
