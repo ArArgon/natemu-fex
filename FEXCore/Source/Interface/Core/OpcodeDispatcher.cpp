@@ -3306,6 +3306,10 @@ void OpDispatchBuilder::FexcStringOp(OpcodeArgs, FexcString Kind) {
   const bool A32 = Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_ADDRESS_SIZE;
   auto Reg = [&](uint32_t R) { return LoadGPRRegister(R, A32 ? OpSize::i32Bit : OpSize::iInvalid); };
   auto Put = [&](uint32_t R, Ref V) { StoreGPRRegister(R, A32 ? _Bfe(OpSize::i64Bit, 32, 0, V) : V); };
+  // natemu M2: in 32-bit code ESI, EDI and ECX step in 32 bits (they wrap at 4 GiB, the upper halves stay zero), and the
+  // destination is ES:EDI (GetSegment gives no segment for it in 64-bit code). 0x67 there (SI/DI/CX) is not compiled (Cut).
+  const auto Wide = Is64BitMode ? OpSize::i64Bit : OpSize::i32Bit;
+  auto Step = [&](Ref X) { return _AddShift(Wide, X, LoadDF(), ShiftType::LSL, FEXCore::ilog2(Bytes)); };
 
   // natemu slice1 (perf chunk 26): with `--bulk` (the host's request for a block that is not a single-instruction step and
   // runs without alignment checking or data breakpoints), REP STOS in 64-bit addressing first stores the part of the string
@@ -3331,38 +3335,39 @@ void OpDispatchBuilder::FexcStringOp(OpcodeArgs, FexcString Kind) {
   Ref RSI = UsesRSI ? Reg(X86State::REG_RSI) : nullptr;
   Ref RDI = UsesRDI ? Reg(X86State::REG_RDI) : nullptr;
   Ref Source = UsesRSI ? AppendSegmentOffset(RSI, Op->Flags, FEXCore::X86Tables::DecodeFlags::FLAG_DS_PREFIX) : nullptr;
+  Ref Target = UsesRDI ? AppendSegmentOffset(RDI, 0, FEXCore::X86Tables::DecodeFlags::FLAG_ES_PREFIX, true) : nullptr;
   switch (Kind) {
   case FexcString::MOVS: {
     fexc_movs.insert(Op->PC);   // two memory operands, not a read-modify-write (the site recorder)
     auto Value = Load(Source);
-    _StoreMem(RegClass::GPR, Size, Value, RDI, Invalid(), OpSize::i8Bit, MemOffsetType::SXTX, 1);
+    _StoreMem(RegClass::GPR, Size, Value, Target, Invalid(), OpSize::i8Bit, MemOffsetType::SXTX, 1);
     break;
   }
   case FexcString::STOS:
-    _StoreMem(RegClass::GPR, Size, LoadGPRRegister(X86State::REG_RAX, Size, 0, true), RDI, Invalid(), OpSize::i8Bit, MemOffsetType::SXTX, 1);
+    _StoreMem(RegClass::GPR, Size, LoadGPRRegister(X86State::REG_RAX, Size, 0, true), Target, Invalid(), OpSize::i8Bit, MemOffsetType::SXTX, 1);
     break;
   case FexcString::LODS: StoreGPRResultWithZExtSemantics(X86State::REG_RAX, Load(Source), Size); break;
   case FexcString::SCAS: {
-    auto Memory = Load(RDI);
+    auto Memory = Load(Target);
     CalculateFlags_SUB(Size, LoadGPRRegister(X86State::REG_RAX, Size, 0, true), Memory);
     break;
   }
   case FexcString::CMPS: {
-    auto Destination = Load(RDI);
+    auto Destination = Load(Target);
     CalculateFlags_SUB(Size, Load(Source), Destination);
     break;
   }
   }
   if (UsesRDI) {
-    Put(X86State::REG_RDI, OffsetByDir(RDI, Bytes));
+    Put(X86State::REG_RDI, Step(RDI));
   }
   if (UsesRSI) {
-    Put(X86State::REG_RSI, OffsetByDir(RSI, Bytes));
+    Put(X86State::REG_RSI, Step(RSI));
   }
   if (!Repeat) {
     return;
   }
-  Put(X86State::REG_RCX, Sub(OpSize::i64Bit, LoadGPRRegister(X86State::REG_RCX), 1));
+  Put(X86State::REG_RCX, Sub(Wide, LoadGPRRegister(X86State::REG_RCX), 1));
 
   IRPair<IROp_CondJump> Last;
   if (Bulk) {
