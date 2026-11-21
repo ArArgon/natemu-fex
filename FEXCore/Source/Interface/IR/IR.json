@@ -2997,6 +2997,15 @@
                 ],
         "HasSideEffects": true
       },
+      "FexcX87Guess u16:$Value": {
+        "Desc": ["natemu slice1 (M2 task 4): the x87 stack pass compiled what follows in this IR block for the stack top and the",
+                 "tag byte $Value (TOP << 8 | tags) seen when the unit was requested: when the guest state holds another pair the",
+                 "unit is not for this entry (a stub at the block's first x87 instruction: the state before it; the resident",
+                 "retires the unit and goes on from there, and the next request for the unit's RIP comes without a guess).",
+                 "Its JIT form is natemu's (fexc_sites.inc)"
+                ],
+        "HasSideEffects": true
+      },
       "FexcX87Tag GPR:$FTW, GPR:$Index, i1:$Push": {
         "Desc": ["natemu slice1 (M2 task 4): the x87 stack check of an instruction, at its start: bit $Index of the tag byte $FTW",
                  "must be clear for a push ($Push) and set for a read; else the instruction is the resident's (a stub: the state",

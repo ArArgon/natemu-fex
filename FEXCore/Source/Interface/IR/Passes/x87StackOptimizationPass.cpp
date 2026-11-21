@@ -5,6 +5,7 @@
 #include "Interface/IR/IREmitter.h"
 #include "Interface/IR/Passes.h"
 #include <fexc_hook.h>
+#include <unordered_map>
 #include <fexc_precision.h>
 #include "Interface/IR/PassManager.h"
 #include "FEXCore/IR/IR.h"
@@ -321,6 +322,24 @@ private:
   // test passed, the tag is known for the rest of the block. Mutated: the instruction changed the x87 stack state already
   // (no check follows a change in any form; if one did it would be the inline one). Boundary*: TOP's registers and the tag
   // byte as they were at the instruction's start, which the test and a late flush before the instruction may use.
+  // M2 task 4, the guess (FexcX87Guess, fexc_x87_guess): a unit of 32-bit code is compiled for the stack top and the tags the
+  // guest state held when it was requested. TopAbs: the register number of each TOP + i while known (the guess, kept through
+  // pushes and pops), which makes every register a field at a fixed offset and, with every tag known, the tag byte a
+  // constant. An IR block's first x87 instruction tests the pair once (a stub: the unit is retired on a miss, and the
+  // code after the test is what a unit without a guess would do, with constants). Guesses: per IR block, the pair its
+  // predecessor in the unit leaves (the entry block's is the request's).
+  std::array<int8_t, 8> TopAbs {-1, -1, -1, -1, -1, -1, -1, -1};
+  bool GuessTried = false;
+  std::unordered_map<uint32_t, uint16_t> Guesses;
+  bool TagsStatic() const {
+    for (size_t i = 0; i < TopAbs.size(); i++) if (TopAbs[i] < 0 || TopValidCache[i] == StackSlot::UNUSED) return false;
+    return true;
+  }
+  uint8_t StaticTags() const {
+    uint8_t Tags = 0;
+    for (size_t i = 0; i < TopAbs.size(); i++) Tags |= uint8_t(TopValidCache[i] == StackSlot::VALID) << TopAbs[i];
+    return Tags;
+  }
   bool Mutated = false, BoundaryFlushed = false;
   std::array<Ref, 8> BoundaryTop {};
   Ref BoundaryFTW {}, StubCursor {};   // StubCursor: the instruction's last test (the next one follows it)
@@ -447,6 +466,7 @@ inline void X87StackOptimization::InvalidateCachedRegs() {
   TopBad.fill(nullptr);
   TagDirty.fill(false);
   TopQuiet.fill(false);
+  TopAbs.fill(-1);
 }
 
 inline void X87StackOptimization::NoteFault(Ref Bad, bool Push) {
@@ -484,10 +504,10 @@ inline void X87StackOptimization::FexcBoundary(bool Flush) {
     // Left pending: what a flush before this instruction would use exists already (TagStub may ask for one later).
     bool Tags = false;
     for (size_t i = 0; i < TagDirty.size(); i++) {
-      if (FlushValuesPending[i] || TagDirty[i]) GetOffsetTopWithCache_Slow(i);
+      if ((FlushValuesPending[i] || TagDirty[i]) && TopAbs[i] < 0) GetOffsetTopWithCache_Slow(i);
       Tags |= TagDirty[i];
     }
-    if (Tags) {
+    if (Tags && !TagsStatic()) {
       GetFTW();
       GetTopWithCache_Slow();
     }
@@ -670,6 +690,7 @@ inline void X87StackOptimization::Reset() {
   Mutated = BoundaryFlushed = false;
   BoundaryTop.fill(nullptr);
   BoundaryFTW = StubCursor = {};
+  GuessTried = false;
   Tiny = {};
   Fault = Overflow = OpFault = SNaN = {};
   Pushed = C1Zero = false;
@@ -703,6 +724,9 @@ inline void X87StackOptimization::MigrateToSlowPathIf(bool ShouldMigrate) {
 }
 
 inline Ref X87StackOptimization::GetTopWithCache_Slow() {
+  if (!TopOffsetCache[0] && TopAbs[0] >= 0) {
+    return IREmit->_Constant(TopAbs[0]);   // (not cached: a constant is not worth a register)
+  }
   if (!TopOffsetCache[0]) {
     TopOffsetCache[0] = IREmit->_LoadContextGPR(OpSize::i8Bit, offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_TOP_LOC);
     // natemu slice1 (I6): TOP is a guest-state byte the guest can reach (the page deviation): keep every index inside mm[].
@@ -720,6 +744,9 @@ inline Ref X87StackOptimization::GetOffsetTopWithCache_Slow(uint8_t Offset, bool
 
   if (TopOffsetCache[Offset]) {
     return TopOffsetCache[Offset];
+  }
+  if (TopAbs[Offset] >= 0) {
+    return IREmit->_Constant(TopAbs[Offset]);
   }
 
   auto* OffsetTop = GetTopWithCache_Slow();
@@ -793,7 +820,8 @@ inline Ref X87StackOptimization::LoadStackValueAtOffset_Slow(uint8_t Offset) {
     // (M2 task 4: the tag's test first, where it is a stub at the instruction's start: TagStub.)
     const bool Stub = CheckReads && FexcCache() && TopValidCache[Offset] == StackSlot::UNUSED && TagStub(Offset, false);
     if (Stub) TopValidCache[Offset] = StackSlot::VALID;
-    Ref Raw = IREmit->_LoadContextFPRIndexed(GetOffsetTopWithCache_Slow(Offset), Size, MMBaseOffset(), 16);
+    Ref Raw = TopAbs[Offset] >= 0 ? Ref(IREmit->_LoadContextFPR(Size, MMBaseOffset() + 16 * TopAbs[Offset])) :
+                                    Ref(IREmit->_LoadContextFPRIndexed(GetOffsetTopWithCache_Slow(Offset), Size, MMBaseOffset(), 16));
     TopValueCache[Offset] = CheckReads ? StackChecked(Raw, Offset, false) : Raw;
   }
   if (!TopValueCache[Offset]) {
@@ -915,7 +943,7 @@ inline void X87StackOptimization::UpdateTopForPop_Slow(bool InvalidateTag) {
   }
 
   // Pop the top of the x87 stack
-  GetOffsetTopWithCache_Slow(1);
+  if (TopAbs[1] < 0) GetOffsetTopWithCache_Slow(1);
   Mutated = true;
   PopContainer(TopOffsetCache);
   PopContainer(TopOffsetAddressCache);
@@ -923,6 +951,7 @@ inline void X87StackOptimization::UpdateTopForPop_Slow(bool InvalidateTag) {
   PopContainer(FlushValuesPending);
   PopContainer(TopValidCache);
   PopContainer(TopBad);
+  PopContainer(TopAbs);
   PopContainer(TopQuiet);
   PopContainer(TagDirty);
   FlushTopPending = true;
@@ -935,7 +964,7 @@ inline void X87StackOptimization::UpdateTopForPush_Slow() {
   };
 
   // Push the top of the x87 stack
-  GetOffsetTopWithCache_Slow(1, true);
+  if (TopAbs[7] < 0) GetOffsetTopWithCache_Slow(1, true);
   Mutated = true;
   PushContainer(TopOffsetCache);
   PushContainer(TopOffsetAddressCache);
@@ -943,6 +972,7 @@ inline void X87StackOptimization::UpdateTopForPush_Slow() {
   PushContainer(FlushValuesPending);
   PushContainer(TopValidCache);
   PushContainer(TopBad);
+  PushContainer(TopAbs);
   PushContainer(TopQuiet);
   PushContainer(TagDirty);
   FlushTopPending = true;
@@ -950,12 +980,16 @@ inline void X87StackOptimization::UpdateTopForPush_Slow() {
 
 void X87StackOptimization::FlushCachedRegs() {
   if (FlushTopPending) {
-    IREmit->_StoreContextGPR(OpSize::i8Bit, TopOffsetCache[0], offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_TOP_LOC);
+    IREmit->_StoreContextGPR(OpSize::i8Bit, GetTopWithCache_Slow(), offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_TOP_LOC);
     FlushTopPending = false;
   }
 
   auto Size = ReducedPrecisionMode ? OpSize::i64Bit : OpSize::i128Bit;
   for (size_t i = 0; i < FlushValuesPending.size(); i++) {
+    if (FlushValuesPending[i] && fexc_slice1 && TopAbs[i] >= 0) {
+      IREmit->_StoreContextFPR(Size, TopValueCache[i], MMBaseOffset() + 16 * TopAbs[i]);   // (M2 task 4: the register's number is known)
+      FlushValuesPending[i] = false;
+    }
     if (FlushValuesPending[i] && fexc_slice1) {
       IREmit->_StoreContextFPRIndexed(TopValueCache[i], GetOffsetTopWithCache_Slow(i), Size, MMBaseOffset(), 16);   // natemu slice1 (I6)
       FlushValuesPending[i] = false;
@@ -968,6 +1002,13 @@ void X87StackOptimization::FlushCachedRegs() {
     }
   }
 
+  if (FlushValidPending && fexc_slice1 && TagsStatic()) {
+    // M2 task 4: every tag and every register's number is known: the tag byte is a constant.
+    FTWCached = {};
+    IREmit->_StoreContextGPR(OpSize::i8Bit, IREmit->_Constant(StaticTags()), offsetof(FEXCore::Core::CPUState, AbridgedFTW));
+    TagDirty.fill(false);
+    FlushValidPending = false;
+  }
   if (FlushValidPending) {
     uint8_t ValidMask = 0;
     uint8_t InvalidMask = 0;
@@ -1089,8 +1130,14 @@ void X87StackOptimization::Run(IREmitter* Emit) {
   IREmit = Emit;
   const uint32_t FexcFirstNew = CurrentIR.GetSSACount();   // natemu: this pass's own nodes are numbered from here
 
+  Guesses.clear();
+  bool EntryBlock = true;
   // Run optimization proper
   for (auto [BlockNode, BlockHeader] : CurrentIR.GetBlocks()) {
+    if (EntryBlock && fexc_slice1 && uint64_t(fexc_x87_guess)) {   // (the request's: bit 12 set, TOP << 8 | tags)
+      Guesses[CurrentIR.GetID(BlockNode).Value] = uint16_t(uint64_t(fexc_x87_guess) & 0x7ff);
+    }
+    EntryBlock = false;
     auto BlockIROp = BlockHeader->CW<FEXCore::IR::IROp_CodeBlock>();
     // Each time we deal with a new block we need to start over.
     // The optimization should run per-block
@@ -1104,6 +1151,24 @@ void X87StackOptimization::Run(IREmitter* Emit) {
         FexcRip = HeaderOp->OriginalRIP + IROp->C<IROp_GuestOpcode>()->GuestEntryOffset;
         FexcOpcode = CodeNode;
         FexcBoundary(!fexc_x87_quiet.count(FexcRip));
+        if (!GuessTried && fexc_x87.count(FexcRip)) {
+          // M2 task 4: the IR block's first x87 instruction: the guess's test, then the block knows TOP and every tag.
+          GuessTried = true;
+          const auto Guess = Guesses.find(CurrentIR.GetID(BlockNode).Value);
+          if (Guess != Guesses.end() && FexcCache() && !FlushTopPending && !FlushValidPending) {
+            const uint16_t Value = Guess->second;
+            IREmit->SetWriteCursor(CodeNode);
+            StubCursor = IREmit->_FexcX87Guess(Value);
+            IREmit->SetWriteCursorBefore(CodeNode);
+            InvalidateCachedRegs();   // (nothing pending: what an earlier instruction of the block cached is read again as fields)
+            for (size_t i = 0; i < TopAbs.size(); i++) {
+              TopAbs[i] = int8_t((Value >> 8) + i & 7);
+              TopValidCache[i] = Value >> TopAbs[i] & 1 ? StackSlot::VALID : StackSlot::INVALID;
+            }
+            BoundaryTop.fill(nullptr);
+            BoundaryFTW = {};
+          }
+        }
         for (size_t i = 0; i < TopBad.size(); i++) {
           if (TopBad[i]) {   // a register read with a run-time tag check: read and checked again (its check bit is not kept in a register)
             TopBad[i] = {};
@@ -1641,6 +1706,17 @@ void X87StackOptimization::Run(IREmitter* Emit) {
     SynchronizeStackValues();
     FlushCachedRegs();
     if (fexc_slice1) FexcEndInstruction();
+    if (fexc_slice1 && (GuessTried ? TagsStatic() : Guesses.count(CurrentIR.GetID(BlockNode).Value) != 0)) {
+      // M2 task 4: what this IR block leaves is its successors' guess (a block with no x87 instruction passes its own on).
+      const uint16_t Value = GuessTried ? uint16_t(TopAbs[0] << 8 | StaticTags()) : Guesses[CurrentIR.GetID(BlockNode).Value];
+      const auto Pass = [&](OrderedNodeWrapper Target) { Guesses.try_emplace(Target.ID().Value, Value); };
+      if (LastIROp->Op == OP_JUMP) {
+        Pass(LastIROp->C<IROp_Jump>()->TargetBlock);
+      } else if (LastIROp->Op == OP_CONDJUMP) {
+        Pass(LastIROp->C<IROp_CondJump>()->TrueBlock);
+        Pass(LastIROp->C<IROp_CondJump>()->FalseBlock);
+      }
+    }
   }
 }
 
