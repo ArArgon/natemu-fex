@@ -340,11 +340,22 @@ private:
     for (size_t i = 0; i < TopAbs.size(); i++) Tags |= uint8_t(TopValidCache[i] == StackSlot::VALID) << TopAbs[i];
     return Tags;
   }
+  // M2 task 4, the map (FexcX87Slot, FexcX87Map): while the block knows every register's number and every tag (the guess),
+  // nothing is written before an instruction that can fault. What was pending at its start is named in a record instead
+  // (each register's host register, TOP and the tag byte as numbers: applying it twice changes nothing), from which the
+  // resident rebuilds the guest state at a fault point of that instruction. Written before it as before: the last
+  // instruction of an IR block (its exit's checks are fault points after the block's final writes) and an instruction
+  // with an op that reads or drops the caches (OpcodeFlags, from a first look at the block).
+  enum : uint8_t { OpcodeLast = 1, OpcodePage = 2 };
+  std::unordered_map<uint32_t, uint8_t> OpcodeFlags;
+  bool MapPending = false;
+  std::array<Ref, 8> MapValues {};
+  uint8_t MapTop = 0, MapTags = 0;
   bool Mutated = false, BoundaryFlushed = false;
   std::array<Ref, 8> BoundaryTop {};
   Ref BoundaryFTW {}, StubCursor {};   // StubCursor: the instruction's last test (the next one follows it)
   bool TagStub(uint8_t Offset, bool Push);
-  void FexcBoundary(bool Flush);
+  void FexcBoundary(bool Flush, uint8_t Flags);
   // M2 task 4: what the block knows without a run-time test. C1Read: the instruction read a stack register (C1 = 0 at its
   // end); C1Known0: the page's C1 is 0 already (nothing wrote it since this pass stored 0). TopQuiet: the cached register
   // holds the result of a floating-point op of this block, which is never a signalling NaN (FST m64 need not quiet it).
@@ -487,7 +498,7 @@ inline void X87StackOptimization::NoteFault(Ref Bad, bool Push) {
   }
 }
 
-inline void X87StackOptimization::FexcBoundary(bool Flush) {
+inline void X87StackOptimization::FexcBoundary(bool Flush, uint8_t Flags) {
   // The page is complete before an instruction that can fault, stop or call out (FexcCache's comment).
   const bool Wide = GPROpSize == OpSize::i64Bit;
   const auto Count = [](const auto& Cache) { return size_t(std::count_if(Cache.begin(), Cache.end(), [](Ref R) { return R != nullptr; })); };
@@ -501,7 +512,18 @@ inline void X87StackOptimization::FexcBoundary(bool Flush) {
     TopBad.fill(nullptr);
     Flush = true;
   }
-  if (Flush) {
+  if (Flush && !Flags && FexcCache() && TagsStatic()) {
+    // The map: nothing is written; what is pending is named for the instruction's fault points (at its end: FexcEndInstruction).
+    MapPending = FlushTopPending || FlushValidPending || std::any_of(FlushValuesPending.begin(), FlushValuesPending.end(), [](bool P) { return P; });
+    if (MapPending) {
+      MapTop = uint8_t(TopAbs[0]);
+      MapTags = StaticTags();
+      MapValues.fill(nullptr);
+      for (size_t i = 0; i < TopAbs.size(); i++) {
+        if (FlushValuesPending[i]) MapValues[TopAbs[i]] = TopValueCache[i];
+      }
+    }
+  } else if (Flush) {
     FlushCachedRegs();
   } else if (FexcCache()) {
     // Left pending: what a flush before this instruction would use exists already (TagStub may ask for one later).
@@ -537,6 +559,13 @@ inline bool X87StackOptimization::TagStub(uint8_t Offset, bool Push) {
     ConstantPool.fill(nullptr);
   }
   IREmit->SetWriteCursor(StubCursor ? StubCursor : FexcOpcode);
+  if (TopValidCache[Offset] != StackSlot::UNUSED) {
+    // A fault the block knows of (the tag is known, and wrong for the instruction): the test fails whatever the page holds
+    // (under the map the page's tag byte is not current).
+    StubCursor = IREmit->_FexcX87Tag(IREmit->_Constant(Push ? 1 : 0), IREmit->_Constant(0), Push);
+    IREmit->SetWriteCursor(Cursor);
+    return true;
+  }
   if (!BoundaryTop[0]) {
     BoundaryTop[0] = IREmit->_And(OpSize::i32Bit, IREmit->_LoadContextGPR(OpSize::i8Bit, offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_TOP_LOC), IREmit->_Constant(7));
     if (!TopOffsetCache[0]) TopOffsetCache[0] = BoundaryTop[0];
@@ -658,6 +687,13 @@ inline void X87StackOptimization::FlushStackFault() {
 }
 
 inline void X87StackOptimization::FexcEndInstruction() {
+  if (MapPending) {
+    for (size_t r = 0; r < MapValues.size(); r++) {
+      if (MapValues[r]) IREmit->_FexcX87Slot(MapValues[r], uint8_t(r));
+    }
+    IREmit->_FexcX87Map(MapTop, MapTags);
+    MapPending = false;
+  }
   // natemu slice1: the instruction's check operands for FexcPrecision::PlaceFPChecks, and its
   // flags from the pending byte into the exception word, after everything it committed.
   if (FexcRip != ~0ull && (Fault || Overflow || SNaN || Tiny)) {
@@ -691,6 +727,7 @@ inline void X87StackOptimization::Reset() {
   Held = false;
   C1Read = C1Known0 = false;
   Mutated = BoundaryFlushed = false;
+  MapPending = false;
   BoundaryTop.fill(nullptr);
   BoundaryFTW = StubCursor = {};
   GuessTried = false;
@@ -1145,6 +1182,20 @@ void X87StackOptimization::Run(IREmitter* Emit) {
     // Each time we deal with a new block we need to start over.
     // The optimization should run per-block
     Reset();
+    if (fexc_slice1) {
+      // A first look: the block's last instruction, and the instructions with an op that reads or drops the caches.
+      OpcodeFlags.clear();
+      uint32_t Opcode = 0;
+      for (auto [CodeNode, IROp] : CurrentIR.GetCode(BlockNode)) {
+        if (IROp->Op == OP_GUESTOPCODE) {
+          Opcode = CurrentIR.GetID(CodeNode).Value;
+          OpcodeFlags[Opcode] = 0;
+        } else if (Opcode && (IROp->Op == OP_SYNCSTACKTOSLOW || IROp->Op == OP_STACKFORCESLOW || IROp->Op == OP_INITSTACK || FexcX87State(IROp))) {
+          OpcodeFlags[Opcode] |= OpcodePage;
+        }
+      }
+      if (Opcode) OpcodeFlags[Opcode] |= OpcodeLast;
+    }
 
     IREmit->SetCurrentCodeBlock(BlockNode);
     for (auto [CodeNode, IROp] : CurrentIR.GetCode(BlockNode)) {
@@ -1154,7 +1205,7 @@ void X87StackOptimization::Run(IREmitter* Emit) {
         FexcEndInstruction();
         FexcRip = HeaderOp->OriginalRIP + IROp->C<IROp_GuestOpcode>()->GuestEntryOffset;
         FexcOpcode = CodeNode;
-        FexcBoundary(!fexc_x87_quiet.count(FexcRip));
+        FexcBoundary(!fexc_x87_quiet.count(FexcRip), OpcodeFlags[CurrentIR.GetID(CodeNode).Value]);
         if (!GuessTried && fexc_x87.count(FexcRip)) {
           // M2 task 4: the IR block's first x87 instruction: the guess's test, then the block knows TOP and every tag.
           GuessTried = true;

@@ -2997,6 +2997,22 @@
                 ],
         "HasSideEffects": true
       },
+      "FexcX87Slot FPR:$Value, u8:$Register": {
+        "Desc": ["natemu slice1 (M2 task 4): emits no code. At the end of a guest instruction: x87 register $Register (its number, not",
+                 "its place on the stack) held $Value at the instruction's start and the guest state does not hold it yet. The use",
+                 "keeps $Value in its host register through the instruction; the JIT records that register for FexcX87Map.",
+                 "Its JIT form is natemu's (fexc_sites.inc)"
+                ],
+        "HasSideEffects": true
+      },
+      "FexcX87Map u8:$Top, u8:$Tags": {
+        "Desc": ["natemu slice1 (M2 task 4): emits no code. Closes the FexcX87Slot ops of a guest instruction: at each of its fault",
+                 "points the x87 stack state is the guest state's with those registers from their host registers, TOP = $Top and the",
+                 "tag byte $Tags (the JIT writes the record the resident rebuilds the state from).",
+                 "Its JIT form is natemu's (fexc_sites.inc)"
+                ],
+        "HasSideEffects": true
+      },
       "FexcX87Guess u16:$Value": {
         "Desc": ["natemu slice1 (M2 task 4): the x87 stack pass compiled what follows in this IR block for the stack top and the",
                  "tag byte $Value (TOP << 8 | tags) seen when the unit was requested: when the guest state holds another pair the",
