@@ -314,7 +314,7 @@ private:
   void NoteFault(Ref Bad, bool Push);
   // M2 task 4, lazy flags (FexcX87Lazy, fexc_hook.h): an instruction with a stack check gets FexcX87Hold at its start (its
   // GuestOpcode node) and FexcX87Release at its end, which drops its own FPSR flags after a stack fault.
-  Ref FexcOpcode {};
+  Ref FexcOpcode {}, BlockFirst {};   // (BlockFirst: the IR block's first op)
   bool Held = false;
   // M2 task 4, the stack check as a stub (FexcX87Tag): where the caches live across instructions (FexcCache) a tag that is not
   // known is tested at the instruction's start, before anything the instruction does, and a stack fault leaves to the
@@ -470,9 +470,12 @@ inline void X87StackOptimization::InvalidateCachedRegs() {
 }
 
 inline void X87StackOptimization::NoteFault(Ref Bad, bool Push) {
-  if (FexcX87Lazy() && !Held && FexcOpcode) {
+  if (FexcX87Lazy() && !Held) {
+    // At the instruction's start; in an IR block that begins inside an instruction, at the block's (before every op of the
+    // instruction that this block holds).
     Ref Cursor = IREmit->GetWriteCursor();
-    IREmit->SetWriteCursor(FexcOpcode);
+    if (FexcOpcode) IREmit->SetWriteCursor(FexcOpcode);
+    else IREmit->SetWriteCursorBefore(BlockFirst);
     IREmit->_FexcX87Hold();
     IREmit->SetWriteCursor(Cursor);
     Held = true;
@@ -684,7 +687,7 @@ inline void X87StackOptimization::FexcEndInstruction() {
 
 inline void X87StackOptimization::Reset() {
   FexcRip = ~0ull;
-  FexcOpcode = {};
+  FexcOpcode = BlockFirst = {};
   Held = false;
   C1Read = C1Known0 = false;
   Mutated = BoundaryFlushed = false;
@@ -1145,6 +1148,7 @@ void X87StackOptimization::Run(IREmitter* Emit) {
 
     IREmit->SetCurrentCodeBlock(BlockNode);
     for (auto [CodeNode, IROp] : CurrentIR.GetCode(BlockNode)) {
+      if (!BlockFirst) BlockFirst = CodeNode;
       if (fexc_slice1 && IROp->Op == OP_GUESTOPCODE) {
         IREmit->SetWriteCursorBefore(CodeNode);   // natemu slice1 (I6, I5c): the previous instruction's stack fault flags, its checks
         FexcEndInstruction();
@@ -1353,6 +1357,7 @@ void X87StackOptimization::Run(IREmitter* Emit) {
       case OP_INITSTACK: {
         StackData.clear();
         InvalidateCachedRegs();
+        Mutated = true;   // (no stack check at the instruction's start after this: TagStub)
         break;
       }
 
@@ -1636,6 +1641,7 @@ void X87StackOptimization::Run(IREmitter* Emit) {
         // This synchronizes stack values but doesn't necessarily moves us off the FastPath!
         Ref NewTop = SynchronizeStackValues();
         FlushCachedRegs();
+        Mutated = true;   // (what the flush created is defined here, after the instruction's start: TagStub)
         IREmit->ReplaceUsesWithAfter(CodeNode, NewTop, CodeNode);
         break;
       }
@@ -1643,6 +1649,7 @@ void X87StackOptimization::Run(IREmitter* Emit) {
       case OP_STACKFORCESLOW: {
         MigrateToSlowPathIf(true);
         InvalidateCachedRegs();
+        Mutated = true;
         break;
       }
 
