@@ -129,6 +129,8 @@ void OpDispatchBuilder::FISTF64(OpcodeArgs, bool Truncate) {
     // ST(0) is the FILD's value untouched when no x87 or MMX instruction lies between the two.
     const auto Next = [&](const auto& S) { const auto It = S.upper_bound(FexcFild64.Rip); return It == S.end() ? ~0ull : *It; };
     if (Next(fexc_x87) >= Op->PC && Next(fexc_x87_waiting) >= Op->PC) {
+      // (The store's site is marked, fexc_x87_int_pair: when it faults the resident keeps the integer for the FISTP's rerun.)
+      fexc_x87_int_pair.insert(Op->PC);
       StoreResultGPR_WithOpSize(Op, Op->Dest, FexcFild64.Raw, Size, OpSize::i8Bit, MemoryAccessType::NONTSO);
       _PopStackDestroy();
       FexcFild64 = {};
@@ -143,6 +145,19 @@ void OpDispatchBuilder::FISTF64(OpcodeArgs, bool Truncate) {
     // Flag-free (no NZCV to save, few live registers: slice1 admits no spill area): NaN from the double's bits, the range
     // check by comparing the 64-bit result with its sign-extended low part (64 bits: the saturated INT64_MAX), a mask select.
     Ref Data = _ReadStackValue(0);
+    Ref Kept {};
+    if (Size == OpSize::i64Bit && !Is64BitMode && Op->PC == Entry && (Op->TableInfo->Flags & X86Tables::InstFlags::FLAGS_POP) != 0) {
+      // natemu slice1 (M2 task 4): a FISTP m64 that starts its unit may be the rerun of one whose store faulted after its
+      // FILD m64 (the pair above; first touch of a page, copy on write): the resident kept the integer, this RIP and ST(0)'s
+      // bits (FEXC_X87_INT*). When RIP and ST(0) are those, that integer is stored (it converts to exactly this double; no
+      // other value is known to be right) and the conversion below runs on +0.0 (no flag, result 0). Flag-free, as the rest.
+      Ref St0 = _VExtractToGPR(OpSize::i64Bit, OpSize::i64Bit, Data, 0);
+      Ref Other = _Or(OpSize::i64Bit, _Xor(OpSize::i64Bit, _LoadContextGPR(OpSize::i64Bit, FEXC_X87_INT_RIP), Constant(Op->PC)),
+                      _Xor(OpSize::i64Bit, _LoadContextGPR(OpSize::i64Bit, FEXC_X87_INT_ST0), St0));
+      Ref Same = _Sub(OpSize::i64Bit, _Lshr(OpSize::i64Bit, _Or(OpSize::i64Bit, Other, _Neg(OpSize::i64Bit, Other)), Constant(63)), Constant(1));
+      Kept = _And(OpSize::i64Bit, _LoadContextGPR(OpSize::i64Bit, FEXC_X87_INT), Same);
+      Data = _VCastFromGPR(OpSize::i64Bit, OpSize::i64Bit, _Andn(OpSize::i64Bit, St0, Same));
+    }
     // m64: frintx (FIST) or fcvtzs (FISTTP) raise PE; m16/m32 round without a flag (frinti/frintz) and compute PE below.
     Ref Integral = Truncate && Size == OpSize::i64Bit ? Data :
                    _Vector_FToI(OpSize::i64Bit, OpSize::i64Bit, Data, Truncate ? RoundMode::TowardsZero : RoundMode::Host);
@@ -163,9 +178,11 @@ void OpDispatchBuilder::FISTF64(OpcodeArgs, bool Truncate) {
       Ref Diff2 = _Xor(OpSize::i64Bit, Bits, _VExtractToGPR(OpSize::i64Bit, OpSize::i64Bit, Integral, 0));
       Inexact = _Andn(OpSize::i64Bit, _Lshr(OpSize::i64Bit, _Or(OpSize::i64Bit, Diff2, _Neg(OpSize::i64Bit, Diff2)), Constant(63)), _Neg(OpSize::i64Bit, Mask));
     }
+    if (Kept) Value = _Or(OpSize::i64Bit, Kept, Value);   // (Value is 0 when the kept integer is used)
     Value = _Or(OpSize::i64Bit, _Andn(OpSize::i64Bit, Value, Mask), _And(OpSize::i64Bit, Mask, Constant(Indefinite)));
     fexc_x87_extra[Op->PC].invalid = OutOfRange;   // natemu slice1 (I5c): an unmasked IE stores nothing (the x87 check's operand)
     StoreResultGPR_WithOpSize(Op, Op->Dest, Value, Size, OpSize::i8Bit, MemoryAccessType::NONTSO);
+    if (Kept) _StoreContextGPR(OpSize::i64Bit, Constant(0), FEXC_X87_INT_RIP);   // (used, or not this one's: after the store)
     if (Size != OpSize::i64Bit) {
       // After the store (a #PF there leaves FSW as it was, except the FPSR flags already accumulated; plan I6 deviations).
       SetRFLAG<FEXCore::X86State::X87FLAG_IE_LOC>(_Or(OpSize::i32Bit, GetRFLAG(FEXCore::X86State::X87FLAG_IE_LOC), OutOfRange));
