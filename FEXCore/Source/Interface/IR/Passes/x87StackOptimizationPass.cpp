@@ -486,7 +486,7 @@ inline void X87StackOptimization::NoteFault(Ref Bad, bool Push) {
     // instruction that this block holds).
     Ref Cursor = IREmit->GetWriteCursor();
     if (FexcOpcode) IREmit->SetWriteCursor(FexcOpcode);
-    else IREmit->SetWriteCursorBefore(BlockFirst);
+    else IREmit->SetWriteCursor(BlockFirst);   // (after the block's first op, its BeginBlock, which has nothing before it)
     IREmit->_FexcX87Hold();
     IREmit->SetWriteCursor(Cursor);
     Held = true;
@@ -1174,7 +1174,9 @@ void X87StackOptimization::Run(IREmitter* Emit) {
   bool EntryBlock = true;
   // Run optimization proper
   for (auto [BlockNode, BlockHeader] : CurrentIR.GetBlocks()) {
-    if (EntryBlock && fexc_slice1 && uint64_t(fexc_x87_guess)) {   // (the request's: bit 12 set, TOP << 8 | tags)
+    // (The request's: bit 12 set, TOP << 8 | tags. 32-bit code only, and asked first: reading the argument marks it as read,
+    // and the host does not serve a kept answer of 64-bit code that read an argument beyond its gating ones.)
+    if (EntryBlock && fexc_slice1 && GPROpSize == OpSize::i32Bit && uint64_t(fexc_x87_guess)) {
       Guesses[CurrentIR.GetID(BlockNode).Value] = uint16_t(uint64_t(fexc_x87_guess) & 0x7ff);
     }
     EntryBlock = false;
