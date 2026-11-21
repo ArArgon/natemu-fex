@@ -153,6 +153,7 @@ public:
     // Changes get stored out by CalculateDeferredFlags.
     CachedNZCV = nullptr;
     CFInverted = CFInvertedABI;
+    FexcMMXSet = false;
 
     FlushRegisterCache();
 
@@ -2473,9 +2474,20 @@ public:
   bool FexcMMXInst = false;
   // natemu (fexc_slice1, I9): after an MMX instruction's handler (Core.cpp): TOP = 0, the abridged tag byte FFH (all valid),
   // then the next instruction starts in the x87 state again (FEX's MMX register cache is flushed per instruction in slice1).
+  // M2 task 4: the instruction right after an MMX instruction, in the same IR block, finds TOP = 0 and the tags valid
+  // already when it is an MMX instruction too (FexcMMXSet): nothing to write (EMMS, x87 and every other instruction clear it).
+  bool FexcMMXSet = false;
   void FexcEndMMX() {
-    if (!FexcMMXInst) return;
+    if (!FexcMMXInst) {
+      FexcMMXSet = false;
+      return;
+    }
     FexcMMXInst = false;
+    if (FexcMMXSet) {
+      MMXState = MMXState_X87;
+      return;
+    }
+    FexcMMXSet = true;
     _StackForceSlow();
     SetX87Top(Constant(0));
     _StoreContextGPR(OpSize::i8Bit, Constant(0xFFUL), offsetof(FEXCore::Core::CPUState, AbridgedFTW));

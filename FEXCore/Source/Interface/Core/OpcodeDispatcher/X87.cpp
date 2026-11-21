@@ -783,6 +783,7 @@ Ref OpDispatchBuilder::ReconstructFSW_Helper(Ref T) {
     // natemu slice1 (I6): the exception flags from the x87 exception word (FPSR order: IOC IE, DZC ZE, OFC OE, UFC UE, IXC PE,
     // IDC DE; bit 6 SF): FSW bits 0 IE, 1 DE, 2..5 ZE OE UE PE, 6 SF. ES and B stay 0: every exception is masked (an FCW that
     // unmasks one is refused by the resident).
+    if (FexcX87Lazy()) _FexcX87Fold();   // (M2 task 4: the flags an x87 run still holds in FPSR)
     Ref Ex = _LoadContextGPR(OpSize::i32Bit, FEXC_X87_EXCEPTIONS);
     FSW = _Orlshl(OpSize::i64Bit, FSW, GetRFLAG(FEXCore::X86State::X87FLAG_PE_LOC), 5);   // FIST m16/m32's PE byte
     FSW = _Orlshl(OpSize::i64Bit, FSW, GetRFLAG(FEXCore::X86State::X87FLAG_SF_LOC), 6);   // the x87 pass's stack fault

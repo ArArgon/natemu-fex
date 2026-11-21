@@ -244,7 +244,8 @@ private:
       [[fallthrough]];
     }
     case OpSize::i64Bit: {
-      if (fexc_slice1 && Op->StoreSize == OpSize::i64Bit) StackNode = QuietSNaN(StackNode);   // natemu slice1 (I6)
+      // natemu slice1 (I6); M2 task 4: but a value this block computed, which is no signalling NaN
+      if (fexc_slice1 && Op->StoreSize == OpSize::i64Bit && !(FexcCache() && TopQuiet[0])) StackNode = QuietSNaN(StackNode);
       if (fexc_slice1 && Op->StoreSize == OpSize::i64Bit && (fexc_x87_unmasked & 16)) {
         // natemu slice1 (I5c): a nonzero double denormal stored to m64 is tiny (exact): x86's unmasked UE (SDM Vol.1 8.5.5).
         // natemu slice1 (I5c review): tiny = the magnitude H = Bits << 1 is nonzero and its exponent field H >> 53 is zero (DBL_MIN
@@ -296,6 +297,42 @@ private:
   // FCHS/FABS (C1 = 0).
   Ref OpFault {}, SNaN {};
   bool Pushed = false, C1Zero = false;
+  // natemu slice1 (M2 task 4): the register, TOP and tag caches live across the x87 instructions of an IR block while every
+  // x87 exception is masked (FexcCache), not per op. What is pending is written to the guest-state page before every
+  // instruction that is not a register-only x87 form (fexc_x87_quiet: it has no fault site, stub or helper), before a helper
+  // call and before any other op that reads or writes the x87 stack state there, so each of them finds the page complete.
+  // TopBad: the check bit of a cached register whose tag was read at run time by the inline check (a later read of the
+  // cached value in the same instruction faults alike; the next instruction reads and checks again);
+  // TagDirty: the tags to write (the others are known, not changed). A tag known in the block needs no check at all.
+  // The caches hold scratch registers (a value each, a general register per TOP + i and one for the tag byte), and slice1
+  // admits no spill: past a budget (64-bit code has half the scratch registers of 32-bit code) everything is written at
+  // the instruction's start and the registers are given up; what the block knows of the tags stays.
+  bool FexcCache() const { return fexc_slice1 && !fexc_step_unit && uint64_t(fexc_x87_unmasked) == 0; }
+  std::array<Ref, 8> TopBad {};
+  std::array<bool, 8> TagDirty {};
+  void NoteFault(Ref Bad, bool Push);
+  // M2 task 4, lazy flags (FexcX87Lazy, fexc_hook.h): an instruction with a stack check gets FexcX87Hold at its start (its
+  // GuestOpcode node) and FexcX87Release at its end, which drops its own FPSR flags after a stack fault.
+  Ref FexcOpcode {};
+  bool Held = false;
+  // M2 task 4, the stack check as a stub (FexcX87Tag): where the caches live across instructions (FexcCache) a tag that is not
+  // known is tested at the instruction's start, before anything the instruction does, and a stack fault leaves to the
+  // resident, which steps the instruction alone (the one-instruction unit has the masked response below, as before). The
+  // test passed, the tag is known for the rest of the block. Mutated: the instruction changed the x87 stack state already
+  // (no check follows a change in any form; if one did it would be the inline one). Boundary*: TOP's registers and the tag
+  // byte as they were at the instruction's start, which the test and a late flush before the instruction may use.
+  bool Mutated = false, BoundaryFlushed = false;
+  std::array<Ref, 8> BoundaryTop {};
+  Ref BoundaryFTW {}, StubCursor {};   // StubCursor: the instruction's last test (the next one follows it)
+  bool TagStub(uint8_t Offset, bool Push);
+  void FexcBoundary(bool Flush);
+  // M2 task 4: what the block knows without a run-time test. C1Read: the instruction read a stack register (C1 = 0 at its
+  // end); C1Known0: the page's C1 is 0 already (nothing wrote it since this pass stored 0). TopQuiet: the cached register
+  // holds the result of a floating-point op of this block, which is never a signalling NaN (FST m64 need not quiet it).
+  bool C1Read = false, C1Known0 = false;
+  std::array<bool, 8> TopQuiet {};
+  bool FexcQuietValue(const IRListView& IR, Ref Node) const;
+  bool FexcX87State(const IROp_Header* IROp) const;
   Ref FaultResult(Ref Value);
   Ref QuietSNaN(Ref Value);
   // natemu slice1 (I5c): the guest RIP of the instruction being lowered, an FST m64's exact-tiny bit (an unmasked UE stores
@@ -407,17 +444,141 @@ inline void X87StackOptimization::InvalidateCachedRegs() {
   TopOffsetAddressCache.fill(nullptr);
   TopValueCache.fill(nullptr);
   TopValidCache.fill(StackSlot::UNUSED);
+  TopBad.fill(nullptr);
+  TagDirty.fill(false);
+  TopQuiet.fill(false);
+}
+
+inline void X87StackOptimization::NoteFault(Ref Bad, bool Push) {
+  if (FexcX87Lazy() && !Held && FexcOpcode) {
+    Ref Cursor = IREmit->GetWriteCursor();
+    IREmit->SetWriteCursor(FexcOpcode);
+    IREmit->_FexcX87Hold();
+    IREmit->SetWriteCursor(Cursor);
+    Held = true;
+  }
+  Fault = Fault ? IREmit->_Or(OpSize::i32Bit, Fault, Bad) : Bad;
+  OpFault = OpFault ? IREmit->_Or(OpSize::i32Bit, OpFault, Bad) : Bad;
+  if (Push) {
+    Overflow = Overflow ? IREmit->_Or(OpSize::i32Bit, Overflow, Bad) : Bad;
+  }
+}
+
+inline void X87StackOptimization::FexcBoundary(bool Flush) {
+  // The page is complete before an instruction that can fault, stop or call out (FexcCache's comment).
+  const bool Wide = GPROpSize == OpSize::i64Bit;
+  const auto Count = [](const auto& Cache) { return size_t(std::count_if(Cache.begin(), Cache.end(), [](Ref R) { return R != nullptr; })); };
+  // The register budget (FexcCache's comment): general registers for TOP + i and the tag byte, vector registers for values.
+  if (FexcCache() && (Count(TopOffsetCache) + (FTWCached ? 1 : 0) > (Wide ? 3 : 9) || Count(TopValueCache) > (Wide ? 5 : 8))) {
+    FlushCachedRegs();
+    const Ref Top = TopOffsetCache[0];
+    TopOffsetCache.fill(nullptr);
+    TopOffsetCache[0] = Top;
+    TopValueCache.fill(nullptr);
+    TopBad.fill(nullptr);
+    Flush = true;
+  }
+  if (Flush) {
+    FlushCachedRegs();
+  } else if (FexcCache()) {
+    // Left pending: what a flush before this instruction would use exists already (TagStub may ask for one later).
+    bool Tags = false;
+    for (size_t i = 0; i < TagDirty.size(); i++) {
+      if (FlushValuesPending[i] || TagDirty[i]) GetOffsetTopWithCache_Slow(i);
+      Tags |= TagDirty[i];
+    }
+    if (Tags) {
+      GetFTW();
+      GetTopWithCache_Slow();
+    }
+  }
+  BoundaryFlushed = Flush;
+  StubCursor = {};
+  Mutated = false;
+  BoundaryTop = TopOffsetCache;
+  BoundaryFTW = FTWCached;
+  ConstantPool.fill(nullptr);   // (a constant is not worth a register across instructions)
+}
+
+inline bool X87StackOptimization::TagStub(uint8_t Offset, bool Push) {
+  if (!FexcCache() || !FexcOpcode || Mutated) {
+    return false;
+  }
+  Ref Cursor = IREmit->GetWriteCursor();
+  if (!BoundaryFlushed) {
+    ConstantPool.fill(nullptr);
+    IREmit->SetWriteCursorBefore(FexcOpcode);
+    FlushCachedRegs();
+    BoundaryFlushed = true;
+    BoundaryFTW = FTWCached;
+    ConstantPool.fill(nullptr);
+  }
+  IREmit->SetWriteCursor(StubCursor ? StubCursor : FexcOpcode);
+  if (!BoundaryTop[0]) {
+    BoundaryTop[0] = IREmit->_And(OpSize::i32Bit, IREmit->_LoadContextGPR(OpSize::i8Bit, offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_TOP_LOC), IREmit->_Constant(7));
+    if (!TopOffsetCache[0]) TopOffsetCache[0] = BoundaryTop[0];
+  }
+  if (!BoundaryTop[Offset]) {
+    BoundaryTop[Offset] = IREmit->_And(OpSize::i32Bit, IREmit->Add(OpSize::i32Bit, BoundaryTop[0], Offset), IREmit->_Constant(7));
+    if (!TopOffsetCache[Offset]) TopOffsetCache[Offset] = BoundaryTop[Offset];
+  }
+  if (!BoundaryFTW) {
+    BoundaryFTW = IREmit->_LoadContextGPR(OpSize::i8Bit, offsetof(FEXCore::Core::CPUState, AbridgedFTW));
+    if (!FTWCached) FTWCached = BoundaryFTW;
+  }
+  StubCursor = IREmit->_FexcX87Tag(BoundaryFTW, BoundaryTop[Offset], Push);
+  IREmit->SetWriteCursor(Cursor);
+  return true;
+}
+
+inline bool X87StackOptimization::FexcQuietValue(const IRListView& IR, Ref Node) const {
+  const auto* Op = IR.GetOp<IROp_Header>(Node);
+  switch (Op->Op) {
+  case OP_VFADD: case OP_VFSUB: case OP_VFMUL: case OP_VFDIV: case OP_VFSQRT: case OP_FLOAT_FTOF: case OP_FLOAT_FROMGPR_S: return true;
+  case OP_VCASTFROMGPR: {
+    const auto* C = IR.GetOp<IROp_Header>(Op->Args[0]);
+    if (C->Op != OP_CONSTANT) return false;
+    const uint64_t V = C->C<IROp_Constant>()->Constant, M = V & 0x7fff'ffff'ffff'ffffULL;
+    return !(M > 0x7ff0'0000'0000'0000ULL && !(V >> 51 & 1));
+  }
+  default: return false;
+  }
+}
+
+// An op of the dispatcher (not this pass's) that reads or writes the x87 stack state in the guest-state page: TOP, the tags, mm[].
+inline bool X87StackOptimization::FexcX87State(const IROp_Header* IROp) const {
+  uint32_t At, Size;
+  switch (IROp->Op) {
+  case OP_LOADCONTEXT: At = IROp->C<IROp_LoadContext>()->Offset; Size = IR::OpSizeToSize(IROp->Size); break;
+  case OP_STORECONTEXT: At = IROp->C<IROp_StoreContext>()->Offset; Size = IR::OpSizeToSize(IROp->Size); break;
+  case OP_LOADCONTEXTINDEXED: At = IROp->C<IROp_LoadContextIndexed>()->BaseOffset; Size = 8 * IROp->C<IROp_LoadContextIndexed>()->Stride; break;
+  case OP_STORECONTEXTINDEXED: At = IROp->C<IROp_StoreContextIndexed>()->BaseOffset; Size = 8 * IROp->C<IROp_StoreContextIndexed>()->Stride; break;
+  case OP_LOADCONTEXTPAIR: At = IROp->C<IROp_LoadContextPair>()->Offset; Size = 32; break;
+  case OP_STORECONTEXTPAIR: At = IROp->C<IROp_StoreContextPair>()->Offset; Size = 32; break;
+  case OP_FEXCX87SVC: return true;
+  default: return false;
+  }
+  const auto Hits = [&](uint32_t F, uint32_t N) { return At < F + N && F < At + Size; };
+  return Hits(offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_TOP_LOC, 1) ||
+         Hits(offsetof(FEXCore::Core::CPUState, AbridgedFTW), 1) || Hits(MMBaseOffset(), 8 * 16);
 }
 
 inline Ref X87StackOptimization::StackChecked(Ref Value, uint8_t Offset, bool Push) {
   // Push: register TOP - 1 (offset 7) must be empty; read: register TOP + Offset must not be.
+  Pushed |= Push;
+  if (FexcCache() && TopValidCache[Offset] == (Push ? StackSlot::INVALID : StackSlot::VALID)) {
+    return Value;   // the tag is known in this block: no fault
+  }
+  if (TagStub(Offset, Push)) {
+    // Past the test the tag is as the instruction needs it: known from here on (not a change: nothing to write).
+    if (TopValidCache[Offset] == StackSlot::UNUSED) TopValidCache[Offset] = Push ? StackSlot::INVALID : StackSlot::VALID;
+    return Value;
+  }
   Ref Valid = GetX87ValidTag_Slow(Offset);
   Ref Bad = Push ? Valid : IREmit->_Xor(OpSize::i32Bit, Valid, GetConstant(1));
-  Fault = Fault ? IREmit->_Or(OpSize::i32Bit, Fault, Bad) : Bad;
-  OpFault = OpFault ? IREmit->_Or(OpSize::i32Bit, OpFault, Bad) : Bad;
-  if (Push) {
-    Pushed = true;
-    Overflow = Overflow ? IREmit->_Or(OpSize::i32Bit, Overflow, Bad) : Bad;
+  NoteFault(Bad, Push);
+  if (!Push && TopValidCache[Offset] == StackSlot::UNUSED) {
+    TopBad[Offset] = Bad;
   }
   Ref Keep = IREmit->_VCastFromGPR(OpSize::i64Bit, OpSize::i64Bit, IREmit->_Sub(OpSize::i64Bit, Bad, GetConstant(1)));   // all ones: no fault
   Ref Indefinite = IREmit->_VCastFromGPR(OpSize::i64Bit, OpSize::i64Bit, IREmit->_Constant(0xfff8'0000'0000'0000ULL));
@@ -458,17 +619,19 @@ inline void X87StackOptimization::FlushStackFault() {
   if (SNaN) {
     OrFlag(FEXCore::X86State::X87FLAG_IE_LOC, SNaN);
   }
-  if (Pushed || C1Zero) {
+  if ((Pushed || C1Zero) && Overflow) {
     // FLD/FILD/the constants: C1 = 1 for a stack overflow, else 0; FCHS/FABS: 0 (SDM "FPU Flags Affected").
-    IREmit->_StoreContextGPR(OpSize::i8Bit, Overflow ? Overflow : GetConstant(0), Flag(FEXCore::X86State::X87FLAG_C1_LOC));
-  } else if (Fault) {
-    // Any instruction that read a stack register (Fault is then an emitted value, whether it is 0 or 1): C1 = 0. Exact for
+    IREmit->_StoreContextGPR(OpSize::i8Bit, Overflow, Flag(FEXCore::X86State::X87FLAG_C1_LOC));
+    C1Known0 = false;
+  } else if ((Pushed || C1Zero || Fault || C1Read) && !C1Known0) {
+    // Any instruction that read a stack register: C1 = 0. Exact for
     // an underflow and for the forms that define C1 = 0; where x87 would report a round-up in C1 (arithmetic, FSQRT, FRNDINT,
     // FST/FSTP, FIST/FISTTP, FCMOVcc), C1 reads 0 (deviation 5).
     IREmit->_StoreContextGPR(OpSize::i8Bit, GetConstant(0), Flag(FEXCore::X86State::X87FLAG_C1_LOC));
+    C1Known0 = FexcCache();
   }
   Fault = Overflow = SNaN = {};
-  Pushed = C1Zero = false;
+  Pushed = C1Zero = C1Read = false;
 }
 
 inline void X87StackOptimization::FexcEndInstruction() {
@@ -481,7 +644,11 @@ inline void X87StackOptimization::FexcEndInstruction() {
     if (SNaN) E.invalid = SNaN;
     E.tiny = Tiny;
   }
-  if (FexcRip != ~0ull && fexc_x87.count(FexcRip)) {
+  if (FexcX87Lazy()) {
+    // M2 task 4: no per-instruction fold (FPSR keeps the flags until something reads the word); a stack fault drops them.
+    if (Held) IREmit->_FexcX87Release(Fault);
+    Held = false;
+  } else if (FexcRip != ~0ull && fexc_x87.count(FexcRip)) {
     Ref Pending = IREmit->_LoadContextGPR(OpSize::i8Bit, FEXC_X87_PENDING);
     // A stack fault has precedence over the operation's own exceptions (SDM Vol.1 4.9.2): their flags are dropped.
     if (Fault) Pending = IREmit->_And(OpSize::i32Bit, Pending, IREmit->_Sub(OpSize::i32Bit, Fault, GetConstant(1)));
@@ -490,18 +657,26 @@ inline void X87StackOptimization::FexcEndInstruction() {
     IREmit->_StoreContextGPR(OpSize::i8Bit, GetConstant(0), FEXC_X87_PENDING);
   }
   Tiny = {};
-  if (Fault || SNaN || Pushed || C1Zero) {
+  if (Fault || SNaN || Pushed || C1Zero || C1Read) {
     FlushStackFault();
   }
 }
 
 inline void X87StackOptimization::Reset() {
   FexcRip = ~0ull;
+  FexcOpcode = {};
+  Held = false;
+  C1Read = C1Known0 = false;
+  Mutated = BoundaryFlushed = false;
+  BoundaryTop.fill(nullptr);
+  BoundaryFTW = StubCursor = {};
   Tiny = {};
   Fault = Overflow = OpFault = SNaN = {};
   Pushed = C1Zero = false;
-  // natemu slice1 (I6): always the slow path, so the x87 state is in the guest-state page at every instruction boundary
-  // (each lowered op flushes below): a fault or stop anywhere in the block sees it exact.
+  // natemu slice1 (I6): always FEX's slow path (its register, TOP and tag caches over the guest-state page, not the
+  // simulated stack, which is written only where FEX's own code reads the page). M2 task 4: the caches are written to the
+  // page before every instruction that can fault, stop or call out (FexcCache); a step unit and a unit under unmasked
+  // x87 exceptions write after each lowered op, as before.
   SlowPath = fexc_slice1;
   StackData.clear();
   InvalidateCaches();
@@ -582,7 +757,12 @@ inline Ref X87StackOptimization::GetFTW() {
 }
 
 inline void X87StackOptimization::SetX87ValidTag(uint8_t Offset, bool Valid) {
+  if (FexcCache() && TopValidCache[Offset] == (Valid ? StackSlot::VALID : StackSlot::INVALID)) {
+    return;   // known so already (written, or pending)
+  }
+  Mutated = true;
   TopValidCache[Offset] = Valid ? StackSlot::VALID : StackSlot::INVALID;
+  TagDirty[Offset] = true;
   FlushValidPending = true;
 }
 
@@ -598,8 +778,21 @@ inline Ref X87StackOptimization::GetX87ValidTag_Slow(uint8_t Offset) {
 inline Ref X87StackOptimization::LoadStackValueAtOffset_Slow(uint8_t Offset) {
   OrderedNode* TopOffsetAddress = fexc_slice1 ? nullptr : GetOffsetTopAddressWithCache_Slow(Offset);
   auto Size = ReducedPrecisionMode ? OpSize::i64Bit : OpSize::i128Bit;
+  C1Read |= CheckReads;
+  if (fexc_slice1 && FexcCache() && TopValidCache[Offset] == StackSlot::INVALID) {
+    // Known empty in this block (FFREE, a pop): a stack underflow; the register keeps what it holds (the cache is not touched).
+    Ref Indefinite = IREmit->_VCastFromGPR(OpSize::i64Bit, OpSize::i64Bit, IREmit->_Constant(0xfff8'0000'0000'0000ULL));
+    if (CheckReads && !TagStub(Offset, false)) NoteFault(GetConstant(1), false);
+    return Indefinite;
+  }
+  if (TopValueCache[Offset] && fexc_slice1 && TopBad[Offset] && CheckReads) {
+    NoteFault(TopBad[Offset], false);   // the cached value of a register read with a run-time tag: the same fault again
+  }
   if (!TopValueCache[Offset] && fexc_slice1) {
     // natemu slice1 (I6): `add x0, x28, xI, lsl #4; ldr dN, [x0, #mm]`, a guest-state access (not a guest memory op: no site).
+    // (M2 task 4: the tag's test first, where it is a stub at the instruction's start: TagStub.)
+    const bool Stub = CheckReads && FexcCache() && TopValidCache[Offset] == StackSlot::UNUSED && TagStub(Offset, false);
+    if (Stub) TopValidCache[Offset] = StackSlot::VALID;
     Ref Raw = IREmit->_LoadContextFPRIndexed(GetOffsetTopWithCache_Slow(Offset), Size, MMBaseOffset(), 16);
     TopValueCache[Offset] = CheckReads ? StackChecked(Raw, Offset, false) : Raw;
   }
@@ -610,7 +803,10 @@ inline Ref X87StackOptimization::LoadStackValueAtOffset_Slow(uint8_t Offset) {
 }
 
 inline void X87StackOptimization::StoreStackValueAtOffset_Slow(Ref Value, uint8_t Offset, bool SetValid) {
+  Mutated = true;
   TopValueCache[Offset] = Value;
+  TopBad[Offset] = {};
+  TopQuiet[Offset] = false;   // (the caller sets it after)
   FlushValuesPending[Offset] = true;
   // mark it valid
   // In some cases we might already know it has been previously set as valid so we don't need to do it again
@@ -670,6 +866,7 @@ void X87StackOptimization::HandleUnop(IROps Op64, bool VFOp64, IROps Op80) {
   }
 
   StoreStackValue(FaultResult(Value));
+  TopQuiet[0] = VFOp64;
 }
 
 
@@ -698,6 +895,7 @@ void X87StackOptimization::HandleBinopValue(IROps Op64, bool VFOp64, IROps Op80,
   }
 
   StoreStackValue(FaultResult(Node), DestStackOffset, MarkDestValid && StackOffset != DestStackOffset);
+  TopQuiet[DestStackOffset] = VFOp64;
 }
 
 void X87StackOptimization::HandleBinopStack(IROps Op64, bool VFOp64, IROps Op80, uint8_t DestStackOffset, uint8_t StackOffset1,
@@ -718,11 +916,15 @@ inline void X87StackOptimization::UpdateTopForPop_Slow(bool InvalidateTag) {
 
   // Pop the top of the x87 stack
   GetOffsetTopWithCache_Slow(1);
+  Mutated = true;
   PopContainer(TopOffsetCache);
   PopContainer(TopOffsetAddressCache);
   PopContainer(TopValueCache);
   PopContainer(FlushValuesPending);
   PopContainer(TopValidCache);
+  PopContainer(TopBad);
+  PopContainer(TopQuiet);
+  PopContainer(TagDirty);
   FlushTopPending = true;
 }
 
@@ -734,11 +936,15 @@ inline void X87StackOptimization::UpdateTopForPush_Slow() {
 
   // Push the top of the x87 stack
   GetOffsetTopWithCache_Slow(1, true);
+  Mutated = true;
   PushContainer(TopOffsetCache);
   PushContainer(TopOffsetAddressCache);
   PushContainer(TopValueCache);
   PushContainer(FlushValuesPending);
   PushContainer(TopValidCache);
+  PushContainer(TopBad);
+  PushContainer(TopQuiet);
+  PushContainer(TagDirty);
   FlushTopPending = true;
 }
 
@@ -774,6 +980,14 @@ void X87StackOptimization::FlushCachedRegs() {
         InvalidMask |= 1;
       }
     }
+    if (FexcCache() && ValidMask != 0xff && InvalidMask != 0xff) {
+      // The cache keeps what is known across flushes: write the tags that changed since the last one.
+      uint8_t Dirty = 0;
+      for (size_t i = 0; i < TagDirty.size(); i++) Dirty |= TagDirty[i] << i;
+      ValidMask &= Dirty;
+      InvalidMask &= Dirty;
+    }
+    TagDirty.fill(false);
 
     if (ValidMask || InvalidMask) {
       Ref NewFTW = [&]() {
@@ -873,6 +1087,7 @@ void X87StackOptimization::Run(IREmitter* Emit) {
 
   // Initialize IREmit member
   IREmit = Emit;
+  const uint32_t FexcFirstNew = CurrentIR.GetSSACount();   // natemu: this pass's own nodes are numbered from here
 
   // Run optimization proper
   for (auto [BlockNode, BlockHeader] : CurrentIR.GetBlocks()) {
@@ -887,6 +1102,25 @@ void X87StackOptimization::Run(IREmitter* Emit) {
         IREmit->SetWriteCursorBefore(CodeNode);   // natemu slice1 (I6, I5c): the previous instruction's stack fault flags, its checks
         FexcEndInstruction();
         FexcRip = HeaderOp->OriginalRIP + IROp->C<IROp_GuestOpcode>()->GuestEntryOffset;
+        FexcOpcode = CodeNode;
+        FexcBoundary(!fexc_x87_quiet.count(FexcRip));
+        for (size_t i = 0; i < TopBad.size(); i++) {
+          if (TopBad[i]) {   // a register read with a run-time tag check: read and checked again (its check bit is not kept in a register)
+            TopBad[i] = {};
+            TopValueCache[i] = {};
+          }
+        }
+        continue;
+      }
+      if (fexc_slice1 && CurrentIR.GetID(CodeNode).Value < FexcFirstNew &&
+          (IROp->Op == OP_FEXCX87SVC || (IROp->Op == OP_STORECONTEXT && IROp->C<IROp_StoreContext>()->Offset ==
+                                           offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_C1_LOC))) {
+        C1Known0 = false;   // the dispatcher's own C1 (FCOMI, FXAM), the resident's
+      }
+      if (fexc_slice1 && CurrentIR.GetID(CodeNode).Value < FexcFirstNew && FexcX87State(IROp)) {
+        IREmit->SetWriteCursorBefore(CodeNode);   // M2 task 4: a dispatcher op on the page's x87 state: written first, read again after
+        InvalidateCachedRegs();
+        Mutated = true;
         continue;
       }
       if (!LoweredX87(IROp->Op)) {
@@ -1069,7 +1303,9 @@ void X87StackOptimization::Run(IREmitter* Emit) {
           }
         } else { // invalidate all
           if (SlowPath) {
+            Mutated = true;
             TopValidCache.fill(StackSlot::INVALID);
+            TagDirty.fill(true);
             FlushValidPending = true;
           } else {
             for (size_t i = 0; i < StackData.size; i++) {
@@ -1085,9 +1321,11 @@ void X87StackOptimization::Run(IREmitter* Emit) {
         auto* SourceNode = CurrentIR.GetNode(Op->X80Src);
 
         if (SlowPath) {
+          const bool Quiet = fexc_slice1 && FexcQuietValue(CurrentIR, SourceNode);
           if (fexc_slice1) SourceNode = StackChecked(SourceNode, 7, true);   // natemu slice1 (I6): stack overflow
           UpdateTopForPush_Slow();
           StoreStackValueAtOffset_Slow(SourceNode);
+          TopQuiet[0] = Quiet;
         } else {
           if (Op->OriginalValue.IsInvalid()) {
             // No original value to track - just push the converted data
@@ -1107,9 +1345,11 @@ void X87StackOptimization::Run(IREmitter* Emit) {
 
         if (SlowPath) {
           Ref St0 = LoadStackValueAtOffset_Slow(Offset);
+          const bool Quiet = TopQuiet[Offset];
           if (fexc_slice1) St0 = StackChecked(St0, 7, true);   // natemu slice1 (I6): stack overflow
           UpdateTopForPush_Slow();
           StoreStackValueAtOffset_Slow(St0);
+          TopQuiet[0] = Quiet;
         } else {
           StackData.push(*Value);
         }
@@ -1191,7 +1431,9 @@ void X87StackOptimization::Run(IREmitter* Emit) {
 
         // Need to store st0 to stack location - basically a copy.
         if (SlowPath) {
+          const bool Quiet = TopQuiet[0];
           StoreStackValueAtOffset_Slow(LoadStackValueAtOffset_Slow(), Offset);
+          TopQuiet[Offset] = Quiet;
         } else {
           StackData.setTop(*Value, Offset);
         }
@@ -1218,8 +1460,11 @@ void X87StackOptimization::Run(IREmitter* Emit) {
           // Slow path: do actual memory operations
           Ref ValueTop = LoadStackValue();
           Ref ValueOffset = LoadStackValue(Offset);
+          const bool QuietTop = TopQuiet[0], QuietOffset = TopQuiet[Offset];
           StoreStackValue(ValueOffset, 0, true);
           StoreStackValue(ValueTop, Offset, true);
+          TopQuiet[0] = QuietOffset;
+          TopQuiet[Offset] = QuietTop;
         } else {
           // Fast path: swap complete StackMemberInfo preserving Source metadata
           StackData.setTop(StackMemberOffset, 0);
@@ -1364,6 +1609,7 @@ void X87StackOptimization::Run(IREmitter* Emit) {
           Value = IREmit->_F80Round(St0);
         }
         StoreStackValue(FaultResult(Value));
+        TopQuiet[0] = ReducedPrecisionMode;
         break;
       }
 
@@ -1382,9 +1628,8 @@ void X87StackOptimization::Run(IREmitter* Emit) {
 
       default: LOGMAN_THROW_A_FMT(false, "IROp was expected to be lowered");
       }
-      // natemu slice1 (I6): the page holds the x87 state after every op; nothing stays cached in registers across ops
-      // (no register pressure builds up over a block: slice1 admits no spill area).
-      if (fexc_slice1) InvalidateCaches();
+      // natemu slice1 (I6): without FexcCache the page holds the x87 state after every op.
+      if (fexc_slice1 && !FexcCache()) InvalidateCaches();
       IREmit->Remove(CodeNode);
     }
 
