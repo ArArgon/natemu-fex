@@ -583,6 +583,10 @@ private:
   // (targets and RIP-relative accesses come from FexcPrecision::Prescan, run before register allocation)
   fextl::map<size_t, ARMEmitter::ForwardLabel> FexcStubs;   // guard/split site index -> its stub
   fextl::vector<size_t> FexcPendingLink;                    // guard/split sites waiting for their access's native offset
+  // natemu slice1: a split stub that probes both pages and returns to its store (shim/fexc_sites.inc): the address
+  // register, the store's width, the word after the check.
+  struct FexcProbe { uint8_t Reg; uint32_t Width; ARMEmitter::BackwardLabel Back; };
+  fextl::map<size_t, FexcProbe> FexcProbes;
   uint32_t FexcTargetsDone {};                              // branch-target checks emitted (all of Prescan's, or the compile dies)
   uint32_t FexcGuest {}, FexcInsnNative {};
   bool FexcCf {true}, FexcNzcvWritten {}, FexcNzcvSaved {}, FexcStoreSeen {};
