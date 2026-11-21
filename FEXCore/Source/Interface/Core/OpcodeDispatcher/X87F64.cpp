@@ -124,8 +124,11 @@ void OpDispatchBuilder::FILDF64(OpcodeArgs) {
 void OpDispatchBuilder::FISTF64(OpcodeArgs, bool Truncate) {
   const auto Size = OpSizeFromSrc(Op);
 
+  // (Only where the FILD's stack check is a stub, the x87 pass's FexcCache: every x87 exception masked, not a step unit. A
+  // push onto a full stack then leaves the unit and both instructions run alone; with the check inline the FILD would push
+  // the indefinite and this store would still write the integer it read: the review of the pair.)
   if (fexc_slice1 && Size == OpSize::i64Bit && FexcFild64.Raw && FexcFild64.Block == GetCurrentBlock() && FexcFild64.Rip < Op->PC &&
-      (Op->TableInfo->Flags & X86Tables::InstFlags::FLAGS_POP) != 0) {
+      (Op->TableInfo->Flags & X86Tables::InstFlags::FLAGS_POP) != 0 && !fexc_step_unit && uint64_t(fexc_x87_unmasked) == 0) {
     // ST(0) is the FILD's value untouched when no x87 or MMX instruction lies between the two.
     const auto Next = [&](const auto& S) { const auto It = S.upper_bound(FexcFild64.Rip); return It == S.end() ? ~0ull : *It; };
     if (Next(fexc_x87) >= Op->PC && Next(fexc_x87_waiting) >= Op->PC) {
