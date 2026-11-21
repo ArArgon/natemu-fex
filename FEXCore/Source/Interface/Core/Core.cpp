@@ -815,6 +815,17 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
     IRDumper(Thread, IREmitter, GuestRIP);
   }
 
+  // natemu fexc (extended blocks): a unit its caller would compile again anyway (too many literal exits) stops here, before the
+  // passes, register allocation and the backend; fexc_ext_abandoned tells the caller this empty result from a failed one.
+  if (fexc_slice1 && fexc_ext_abandon) {
+    auto View = IREmitter->ViewIR();
+    if (fexc_ext_abandon(View)) {
+      fexc_ext_abandoned = true;
+      Thread->OpDispatcher->DelayedDisownBuffer();
+      return {std::nullopt, 0, 0, 0, 0};
+    }
+  }
+
   // Run the passmanager over the IR from the dispatcher
   Thread->PassManager->Run(IREmitter);
 

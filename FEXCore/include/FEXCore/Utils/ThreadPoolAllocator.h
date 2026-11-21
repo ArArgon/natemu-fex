@@ -476,6 +476,10 @@ private:
  *    - Or allocates another buffer when that fails
  *    - Frees stale buffers opportunistically
  */
+// natemu fexc: a compile server that keeps its buffers (true): DelayedDisownBuffer only disowns, without reading the clock to decide
+// whether to give the buffer back (one compile thread, compiling all the time; the clock read was 1.6% of a compile).
+inline bool PoolBufferKeepClaimed = false;
+
 template<typename Type, size_t PeriodMS, size_t PeriodFrequency>
 class PoolBufferWithTimedRetirement final {
   // If the delayed object reclaimer is more than the thread pool allocator's duration then the pool allocator would always need to reclaim
@@ -573,6 +577,9 @@ public:
     // Always disown but not always unclaim
     // Disowning = cheap, unclaiming = expensive
     ThreadAllocator.DisownBuffer(Info);
+    if (PoolBufferKeepClaimed) {
+      return;
+    }
 
     auto Now = std::chrono::steady_clock::now();
     if ((Now - Previous) >= std::chrono::duration(std::chrono::milliseconds(PeriodMS))) {
