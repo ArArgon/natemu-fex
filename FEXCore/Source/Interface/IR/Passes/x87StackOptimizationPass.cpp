@@ -1444,7 +1444,36 @@ void X87StackOptimization::Run(IREmitter* Emit) {
         auto* SourceNode = CurrentIR.GetNode(Op->X80Src);
 
         if (SlowPath) {
-          const bool Quiet = fexc_slice1 && FexcQuietValue(CurrentIR, SourceNode);
+          bool Quiet = fexc_slice1 && FexcQuietValue(CurrentIR, SourceNode);
+          // M2 task 4: FLD m64 in a unit with no x87 arithmetic (fexc_x87_fp: only loads, stores and stack moves, as 32-bit SSE
+          // code has around every call that returns a double, which the i386 ABI returns in ST(0)). The dispatcher's quieting
+          // multiply by 1.0 would open an x87 run for this one instruction, and the next SSE op close it: four writes of FPCR
+          // and FPSR per call. The same result with integer words and no run: an SNaN is quieted with IE, a denormal sets DE
+          // (SDM FLD #IA, #D), every other value is loaded as it is. Only where the stack check is known or a test at the
+          // instruction's start (an inline one drops the flags of a stack fault, which these stores would not).
+          if (fexc_slice1 && fexc_x87_fp.empty() && FexcCache() && FexcX87Lazy() &&
+              (TopValidCache[7] == StackSlot::INVALID || (FexcOpcode && !Mutated))) {
+            const auto* Mul = CurrentIR.GetOp<IROp_Header>(SourceNode);
+            const auto* One = Mul->Op == OP_VFMUL ? CurrentIR.GetOp<IROp_Header>(Mul->Args[1]) : nullptr;
+            const auto* Load = One ? CurrentIR.GetOp<IROp_Header>(Mul->Args[0]) : nullptr;
+            if (One && One->Op == OP_VCASTFROMGPR && CurrentIR.GetOp<IROp_Header>(One->Args[0])->Op == OP_CONSTANT &&
+                CurrentIR.GetOp<IROp_Header>(One->Args[0])->C<IROp_Constant>()->Constant == 0x3ff0'0000'0000'0000ULL &&
+                (Load->Op == OP_LOADMEM || Load->Op == OP_LOADMEMTSO) && Load->Size == OpSize::i64Bit && Op->OriginalValue.ID() == Op->X80Src.ID()) {
+              Ref Bits = IREmit->_VExtractToGPR(OpSize::i64Bit, OpSize::i64Bit, CurrentIR.GetNode(Mul->Args[0]), 0);
+              Ref Abs = IREmit->_And(OpSize::i64Bit, Bits, IREmit->_Constant(0x7fff'ffff'ffff'ffffULL));
+              Ref IsNaN = IREmit->_Lshr(OpSize::i64Bit, IREmit->Add(OpSize::i64Bit, Abs, 0x000f'ffff'ffff'ffffULL), IREmit->_Constant(63));
+              Ref IsSNaN = IREmit->_Andn(OpSize::i64Bit, IsNaN, IREmit->_And(OpSize::i64Bit, IREmit->_Lshr(OpSize::i64Bit, Bits, IREmit->_Constant(51)), GetConstant(1)));
+              Ref H = IREmit->_Lshl(OpSize::i64Bit, Bits, GetConstant(1));
+              Ref ExpZero = IREmit->_Lshr(OpSize::i64Bit, IREmit->_Sub(OpSize::i64Bit, IREmit->_Lshr(OpSize::i64Bit, H, IREmit->_Constant(53)), GetConstant(1)), IREmit->_Constant(63));
+              Ref Denormal = IREmit->_And(OpSize::i64Bit, ExpZero, IREmit->_Lshr(OpSize::i64Bit, IREmit->_Or(OpSize::i64Bit, H, IREmit->_Neg(OpSize::i64Bit, H)), IREmit->_Constant(63)));
+              const uint32_t IE = offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_IE_LOC;
+              IREmit->_StoreContextGPR(OpSize::i8Bit, IREmit->_Or(OpSize::i32Bit, IREmit->_LoadContextGPR(OpSize::i8Bit, IE), IsSNaN), IE);
+              IREmit->_StoreContextGPR(OpSize::i32Bit, IREmit->_Orlshl(OpSize::i32Bit, IREmit->_LoadContextGPR(OpSize::i32Bit, FEXC_X87_EXCEPTIONS), Denormal, 7), FEXC_X87_EXCEPTIONS);
+              IREmit->Remove(SourceNode);   // (the multiply: its one use was this push)
+              SourceNode = IREmit->_VCastFromGPR(OpSize::i64Bit, OpSize::i64Bit, IREmit->_Orlshl(OpSize::i64Bit, Bits, IsSNaN, 51));
+              Quiet = true;
+            }
+          }
           if (fexc_slice1) SourceNode = StackChecked(SourceNode, 7, true);   // natemu slice1 (I6): stack overflow
           UpdateTopForPush_Slow();
           StoreStackValueAtOffset_Slow(SourceNode);
