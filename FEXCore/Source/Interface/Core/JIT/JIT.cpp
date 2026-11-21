@@ -937,6 +937,12 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
   uint32_t SSACount = IR->GetSSACount();
   fexc_sites.clear();
   fexc_insns.clear();
+  // natemu (M2 task 4): what the x87 hooks recorded for an attempt this one restarts (a larger code buffer, far branches):
+  // the x87 maps, the slots of a map not yet closed, and a hold not yet ended.
+  fexc_x87_maps.clear();
+  std::memset(fexc_x87_slots, 0xff, sizeof fexc_x87_slots);
+  fexc_x87_slots_guest = ~0u;
+  fexc_x87_hold_wanted = fexc_x87_held = fexc_x87_fp_seen = false;
   DebugData->FexcEntryPrologues.clear();
   FexcGuest = FexcInsnNative = 0; FexcCf = true; FexcNzcvWritten = FexcNzcvSaved = FexcStoreSeen = false; FexcLoadSite = -1; FexcPendingFused.clear();
   fexc_dispatch_exits.clear();
