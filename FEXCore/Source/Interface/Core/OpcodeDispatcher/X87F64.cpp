@@ -154,8 +154,10 @@ void OpDispatchBuilder::FISTF64(OpcodeArgs, bool Truncate) {
       // FILD m64 (the pair above; first touch of a page, copy on write): the resident kept the integer, this RIP and ST(0)'s
       // bits (FEXC_X87_INT*). When RIP and ST(0) are those, that integer is stored (it converts to exactly this double; no
       // other value is known to be right) and the conversion below runs on +0.0 (no flag, result 0). Flag-free, as the rest.
+      // (This RIP is the unit's entry, as a guest-RIP relocation and not a plain constant: the host moves a kept answer
+      // to another address by its relocations alone; natemu 32-bit reuse.)
       Ref St0 = _VExtractToGPR(OpSize::i64Bit, OpSize::i64Bit, Data, 0);
-      Ref Other = _Or(OpSize::i64Bit, _Xor(OpSize::i64Bit, _LoadContextGPR(OpSize::i64Bit, FEXC_X87_INT_RIP), Constant(Op->PC)),
+      Ref Other = _Or(OpSize::i64Bit, _Xor(OpSize::i64Bit, _LoadContextGPR(OpSize::i64Bit, FEXC_X87_INT_RIP), _EntrypointOffset(OpSize::i32Bit, 0)),
                       _Xor(OpSize::i64Bit, _LoadContextGPR(OpSize::i64Bit, FEXC_X87_INT_ST0), St0));
       Ref Same = _Sub(OpSize::i64Bit, _Lshr(OpSize::i64Bit, _Or(OpSize::i64Bit, Other, _Neg(OpSize::i64Bit, Other)), Constant(63)), Constant(1));
       Kept = _And(OpSize::i64Bit, _LoadContextGPR(OpSize::i64Bit, FEXC_X87_INT), Same);
