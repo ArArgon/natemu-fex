@@ -61,9 +61,17 @@ DEF_OP(ExitFunction) {
     // linker with `svc` (the resident then rewrites the move's first word into a direct branch to the target's entry);
     // a computed exit moves its RIP into x0 and branches to the resident's dispatcher, a `b` the resident relocates when
     // it places the block (FexcDispatchExit records it).
-    if (IsInlineConstant(Op->NewRIP, &NewRIP) || IsInlineEntrypointOffset(Op->NewRIP, &NewRIP)) {
+    // (natemu 32-bit reuse: only a target made from the unit's entry is a guest-RIP relocation. A plain constant target,
+    // which no lowering of the slice gives today, is an absolute address: recorded as a relocation it would be moved
+    // with the block when the host reuses the answer at another address. It is loaded without one and leaves as a
+    // computed exit (`mov x0, xR; b .`, the only form admission takes).)
+    if (IsInlineEntrypointOffset(Op->NewRIP, &NewRIP)) {
       InsertGuestRIPMove(TMP1, NewRIP);
       svc(FEXC_SVC_LINK);
+    } else if (IsInlineConstant(Op->NewRIP, &NewRIP)) {
+      LoadConstant(ARMEmitter::Size::i64Bit, TMP2, NewRIP, FEXCore::CPU::Arm64Emitter::PadType::AUTOPAD);
+      mov(ARMEmitter::Size::i64Bit, TMP1, TMP2);
+      FexcDispatchExit();
     } else {
       const auto RipReg = GetReg(Op->NewRIP);
       if (RipReg.Idx() != TMP1.Idx()) {
