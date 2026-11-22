@@ -8,6 +8,8 @@ $end_info$
 #include "Interface/Context/Context.h"
 #include "Interface/Core/JIT/JITClass.h"
 
+#include <fexc_hook.h>
+
 #include <FEXCore/Core/Thunks.h>
 
 namespace FEXCore::CPU {
@@ -89,6 +91,9 @@ auto Arm64JITCore::InsertGuestRIPLiteral(uint64_t GuestRIP) -> NamedSymbolLitera
 }
 
 void Arm64JITCore::InsertGuestRIPMove(ARMEmitter::Register Reg, uint64_t Constant) {
+  // natemu fexc, 32-bit code: one fixed form, `movz wR, #lo; movk wR, #hi, lsl #16; nop`, the value masked to 32 bits, so
+  // the resident can rewrite every move to its position-independent form (ldr + two adds) in place.
+  if (fexc_bits32) Constant &= 0xffff'ffffu;
   Relocation MoveABI {};
   MoveABI.GuestRIP.Header = {.Offset = GetCursorOffset(), .Type = FEXCore::CPU::RelocationTypes::RELOC_GUEST_RIP_MOVE};
   // NOTE: Cache serialization will subtract the guest binary base address later to produce consistency results
@@ -99,7 +104,13 @@ void Arm64JITCore::InsertGuestRIPMove(ARMEmitter::Register Reg, uint64_t Constan
   // TODO: Force 6-byte `MaxSize`, with sign extension to 64-bit. Current code not smart enough to handle negatives.
   // 48-bit sign extension works because x86-64 guests only receive 47-bit VA space, with 48-bit being reserved for kernel.
   // Additional quirk, "canonical" 48-bit pointers on x86-64, sign extend the 48-bit as well (Which is why kernel pointers are negative).
-  LoadConstant(ARMEmitter::Size::i64Bit, Reg, Constant, FEXCore::CPU::Arm64Emitter::PadType::AUTOPAD);
+  if (fexc_bits32) {
+    movz(ARMEmitter::Size::i32Bit, Reg, Constant & 0xffff, 0);
+    movk(ARMEmitter::Size::i32Bit, Reg, Constant >> 16, 16);
+    nop();
+  } else {
+    LoadConstant(ARMEmitter::Size::i64Bit, Reg, Constant, FEXCore::CPU::Arm64Emitter::PadType::AUTOPAD);
+  }
   Relocations.emplace_back(MoveABI);
 }
 
