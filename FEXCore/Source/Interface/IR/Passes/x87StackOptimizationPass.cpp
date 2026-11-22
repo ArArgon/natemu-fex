@@ -1463,12 +1463,17 @@ void X87StackOptimization::Run(IREmitter* Emit) {
               Ref Abs = IREmit->_And(OpSize::i64Bit, Bits, IREmit->_Constant(0x7fff'ffff'ffff'ffffULL));
               Ref IsNaN = IREmit->_Lshr(OpSize::i64Bit, IREmit->Add(OpSize::i64Bit, Abs, 0x000f'ffff'ffff'ffffULL), IREmit->_Constant(63));
               Ref IsSNaN = IREmit->_Andn(OpSize::i64Bit, IsNaN, IREmit->_And(OpSize::i64Bit, IREmit->_Lshr(OpSize::i64Bit, Bits, IREmit->_Constant(51)), GetConstant(1)));
-              Ref H = IREmit->_Lshl(OpSize::i64Bit, Bits, GetConstant(1));
-              Ref ExpZero = IREmit->_Lshr(OpSize::i64Bit, IREmit->_Sub(OpSize::i64Bit, IREmit->_Lshr(OpSize::i64Bit, H, IREmit->_Constant(53)), GetConstant(1)), IREmit->_Constant(63));
-              Ref Denormal = IREmit->_And(OpSize::i64Bit, ExpZero, IREmit->_Lshr(OpSize::i64Bit, IREmit->_Or(OpSize::i64Bit, H, IREmit->_Neg(OpSize::i64Bit, H)), IREmit->_Constant(63)));
+              // (Fast x87 without AFP: no DE for a memory operand anywhere, `masked-x87-de` in natemu's docs/floating-point.md: Arm
+              // without AFP does not flag it in the multiply this replaces, and a load must not depend on its unit's shape.)
+              Ref Denormal = nullptr;
+              if (!fexc_no_afp) {
+                Ref H = IREmit->_Lshl(OpSize::i64Bit, Bits, GetConstant(1));
+                Ref ExpZero = IREmit->_Lshr(OpSize::i64Bit, IREmit->_Sub(OpSize::i64Bit, IREmit->_Lshr(OpSize::i64Bit, H, IREmit->_Constant(53)), GetConstant(1)), IREmit->_Constant(63));
+                Denormal = IREmit->_And(OpSize::i64Bit, ExpZero, IREmit->_Lshr(OpSize::i64Bit, IREmit->_Or(OpSize::i64Bit, H, IREmit->_Neg(OpSize::i64Bit, H)), IREmit->_Constant(63)));
+              }
               const uint32_t IE = offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_IE_LOC;
               IREmit->_StoreContextGPR(OpSize::i8Bit, IREmit->_Or(OpSize::i32Bit, IREmit->_LoadContextGPR(OpSize::i8Bit, IE), IsSNaN), IE);
-              IREmit->_StoreContextGPR(OpSize::i32Bit, IREmit->_Orlshl(OpSize::i32Bit, IREmit->_LoadContextGPR(OpSize::i32Bit, FEXC_X87_EXCEPTIONS), Denormal, 7), FEXC_X87_EXCEPTIONS);
+              if (Denormal) IREmit->_StoreContextGPR(OpSize::i32Bit, IREmit->_Orlshl(OpSize::i32Bit, IREmit->_LoadContextGPR(OpSize::i32Bit, FEXC_X87_EXCEPTIONS), Denormal, 7), FEXC_X87_EXCEPTIONS);
               IREmit->Remove(SourceNode);   // (the multiply: its one use was this push)
               SourceNode = IREmit->_VCastFromGPR(OpSize::i64Bit, OpSize::i64Bit, IREmit->_Orlshl(OpSize::i64Bit, Bits, IsSNaN, 51));
               Quiet = true;
