@@ -654,10 +654,10 @@
         "DestSize": "RegisterSize",
         "ElementSize": "ElementSize"
       },
-      "GPR = Push OpSize:#Size, OpSize:$ValueSize, GPR:$Value, GPR:$Addr": {
+      "GPR = Push OpSize:#Size, OpSize:$ValueSize, GPR:$Value, GPR:$Addr, i1:$Predecremented": {
         "Desc": [
-          "Pushes a value to the address, returning the new pointer after incrementing.",
-          "The address is decremented by the value size while.",
+          "Pushes a value, returning the stack pointer after the store.",
+          "When Predecremented is set, Addr is already the new stack pointer.",
           "The return value size is the size of the current operating mode"
         ],
         "TiedSource": 1,

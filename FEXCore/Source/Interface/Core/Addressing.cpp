@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "Interface/Core/Addressing.h"
+#include <fexc_hook.h>
 
 #include "Interface/IR/IREmitter.h"
 #include "FEXCore/Utils/MathUtils.h"
@@ -11,7 +12,8 @@ Ref LoadEffectiveAddress(IREmitter* IREmit, const AddressMode& A, IR::OpSize GPR
   Ref Tmp = A.Base;
 
   if (A.Offset) {
-    Tmp = Tmp ? IREmit->Add(GPRSize, Tmp, A.Offset) : IREmit->Constant(A.Offset);
+    const uint64_t Offset = fexc_slice1 && GPRSize == OpSize::i32Bit ? uint32_t(A.Offset) : uint64_t(A.Offset);
+    Tmp = Tmp ? IREmit->Add(GPRSize, Tmp, A.Offset) : IREmit->Constant(Offset);
   }
 
   if (A.Index) {
@@ -56,7 +58,8 @@ AddressMode SelectAddressMode(IREmitter* IREmit, const AddressMode& A, IR::OpSiz
   const auto Is32Bit = GPRSize == OpSize::i32Bit;
   const auto GPRSizeMatchesAddrSize = A.AddrSize == GPRSize;
   const auto OffsetIndexToLargeFor32Bit = Is32Bit && (A.Offset <= -16384 || A.Offset >= 16384);
-  if (!GPRSizeMatchesAddrSize || OffsetIndexToLargeFor32Bit) {
+  // A native offset is added in 64 bits. For a system guest the 32-bit sum must already be wrapped at the access site.
+  if (!GPRSizeMatchesAddrSize || OffsetIndexToLargeFor32Bit || (fexc_slice1 && Is32Bit)) {
     // If address size doesn't match GPR size then no optimizations can occur.
     return {
       .Base = LoadEffectiveAddress(IREmit, A, GPRSize, true),

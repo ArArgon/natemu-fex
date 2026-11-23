@@ -3056,8 +3056,7 @@ void OpDispatchBuilder::EnterOp(OpcodeArgs) {
   const uint8_t Level = (Value >> 16) & 0x1F;
 
   const auto PushValue = [&](IR::OpSize Size, Ref Src) -> Ref {
-    auto OldSP = LoadGPRRegister(X86State::REG_RSP);
-    auto NewSP = _Push(GPRSize, Size, Src, OldSP);
+    auto NewSP = PushStack(Size, Src);
 
     // Store the new stack pointer
     StoreGPRRegister(X86State::REG_RSP, NewSP);

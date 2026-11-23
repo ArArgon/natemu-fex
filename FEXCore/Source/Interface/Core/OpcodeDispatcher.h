@@ -2601,7 +2601,7 @@ protected:
     AddressMode Out {};
 
     signed OffsetEl = A.Offset / SizeInt;
-    if ((A.Offset % SizeInt) == 0 && OffsetEl >= -64 && OffsetEl < 64) {
+    if (!(fexc_slice1 && !Is64BitMode) && (A.Offset % SizeInt) == 0 && OffsetEl >= -64 && OffsetEl < 64) {
       Out.Offset = A.Offset;
       A.Offset = 0;
     }
@@ -2703,9 +2703,18 @@ protected:
     return AlreadyExtended ? Value : _VMov(Size, Value);
   }
 
+  Ref PushStack(IR::OpSize Size, Ref Value) {
+    const auto GPRSize = GetGPROpSize();
+    Ref SP = LoadGPRRegister(X86State::REG_RSP);
+    const bool Predecremented = fexc_slice1 && GPRSize == OpSize::i32Bit;
+    if (Predecremented) {
+      SP = Sub(GPRSize, SP, IR::OpSizeToSize(Size));
+    }
+    return _Push(GPRSize, Size, Value, SP, Predecremented);
+  }
+
   void Push(IR::OpSize Size, Ref Value) {
-    auto OldSP = LoadGPRRegister(X86State::REG_RSP);
-    auto NewSP = _Push(GetGPROpSize(), Size, Value, OldSP);
+    auto NewSP = PushStack(Size, Value);
     StoreGPRRegister(X86State::REG_RSP, NewSP);
     FlushRegisterCache();
   }
