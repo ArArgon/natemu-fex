@@ -4687,13 +4687,23 @@ AddressMode OpDispatchBuilder::DecodeAddress(const X86Tables::DecodedOp& Op, con
 void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, AddressMode& Address, IR::OpSize Size, bool Write) {
   const bool Move = Op->FexcMap == FEXC_MAP_PRIMARY && Op->OPRaw >= 0x88 && Op->OPRaw <= 0x8B;
   const bool Extend = Op->FexcMap == FEXC_MAP_TWO && (Op->OPRaw == 0xB6 || Op->OPRaw == 0xB7 || Op->OPRaw == 0xBE || Op->OPRaw == 0xBF);
-  if (!fexc_slice1 || Is64BitMode || !(Move || Extend))
+  const bool Moffs = Op->FexcMap == FEXC_MAP_PRIMARY && Op->OPRaw >= 0xA0 && Op->OPRaw <= 0xA3;
+  if (!fexc_slice1 || Is64BitMode || !(Move || Extend || Moffs))
     return;
   const auto Prefix = Op->Flags & X86Tables::DecodeFlags::FLAG_SEGMENTS;
   if (Prefix != X86Tables::DecodeFlags::FLAG_FS_PREFIX && Prefix != X86Tables::DecodeFlags::FLAG_GS_PREFIX)
     return;
   Address.Segment = nullptr;
-  Ref Offset = LoadEffectiveAddress(this, Address, OpSize::i32Bit, true);
+  // A0..A3 take the 32-bit offset literally. Keep it identifiable through register allocation
+  // so admission can compare both native immediate halves with the original instruction.
+  Ref Offset;
+  if (Moffs) {
+    const auto& Literal = Op->Src[0];
+    const uint32_t Value = Literal.IsLiteralRelocation() ? Entry + Literal.Data.LiteralRelocation.EntrypointOffset : Literal.Literal();
+    Offset = _InlineConstant(Value);
+  } else {
+    Offset = LoadEffectiveAddress(this, Address, OpSize::i32Bit, true);
+  }
   // Bits 5:4 describe an extending result (16/32 bits), bit 6 sign extension.
   const uint8_t Result = Extend ? (OpSizeFromDst(Op) == OpSize::i16Bit ? 0x10 : 0x20) | (Op->OPRaw >= 0xBE ? 0x40 : 0) : 0;
   Ref Linear = _FexcSegmentAddress(Offset, Prefix == X86Tables::DecodeFlags::FLAG_FS_PREFIX ? 4 : 5, IR::OpSizeToSize(Size), Write, Result);
