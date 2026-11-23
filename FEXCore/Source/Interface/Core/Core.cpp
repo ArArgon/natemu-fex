@@ -727,6 +727,7 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
           if (fexc_slice1 && IsLocked) {
             Thread->OpDispatcher->NrConstants = 0;
           }
+          Thread->OpDispatcher->FexcSegBegin(fexc_slice1 && FexcSlice1::FexcSegLimited(*DecodedInfo));   // natemu (M2 checkpoint C)
           std::invoke(Fn, Thread->OpDispatcher, DecodedInfo);
           if (fexc_slice1) Thread->OpDispatcher->FexcEndMMX();   // natemu (I9): an MMX instruction's TOP and tags, last
           if (fexc_slice1 && IsLocked) {

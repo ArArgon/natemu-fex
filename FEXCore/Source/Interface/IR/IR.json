@@ -2989,13 +2989,10 @@
                 ],
         "HasSideEffects": true
       },
-      "GPR = FexcSegmentAddress GPR:$Offset, u8:$Segment, u8:$Bytes, u8:$Write, u8:$Result, u8:$InlineDword": {
-        "Desc": ["Check a compatibility-mode FS/GS offset against the resident's descriptor and return its linear address."],
-        "DestSize": "OpSize::i32Bit",
-        "HasSideEffects": true
-      },
-      "GPR = FexcStoreImmediate u32:$Value": {
-        "Desc": ["Materialize a compatibility store literal in a checkable pair before the descriptor check and native store."],
+      "GPR = FexcSegmentBase GPR:$Offset, u8:$Segment": {
+        "Desc": ["natemu (M2 checkpoint C): the base of the limited FS (4) or GS (5) of 32-bit user code, after the check of the",
+                 "instruction's whole operand at $Offset against the vCPU's read-only record; the resident's stub decides what the",
+                 "inline test does not (fexc shim/fexc_sites.inc)."],
         "DestSize": "OpSize::i32Bit",
         "HasSideEffects": true
       },

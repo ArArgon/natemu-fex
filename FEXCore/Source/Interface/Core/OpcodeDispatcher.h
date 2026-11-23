@@ -409,7 +409,6 @@ public:
   void SETccOp(OpcodeArgs);
   void CQOOp(OpcodeArgs);
   void CDQOp(OpcodeArgs);
-  Ref FexcAtomicAddress(const X86Tables::DecodedOp& Op);
   std::optional<Ref> XCHGOpImpl(OpcodeArgs, Ref Src);
   void XCHGOp(OpcodeArgs);
   void XCHGRAXOp(OpcodeArgs);
@@ -1538,6 +1537,23 @@ private:
 #undef OpcodeArgs
 
   Ref AppendSegmentOffset(Ref Value, uint32_t Flags, uint32_t DefaultPrefix = 0, bool Override = false);
+  // natemu (M2 checkpoint C): 32-bit user code whose FS or GS is not a flat-limit segment (fexc_limited_segments). The current
+  // instruction accesses memory through such a segment (FexcSegActive, set by the instruction loop from fexc's decode): its
+  // operand's offset is computed once and checked once (FexcSegmentCheck: the FexcSegmentBase op), and the base comes from
+  // that op alone, in the IR block that holds it (register allocation is block-local). FexcSegManual: the handler computes the
+  // offset itself (BT with a register index, XLAT) and DecodeAddress/GetSegment add nothing.
+public:
+  bool FexcSegActive = false;
+  void FexcSegBegin(bool Active) {
+    FexcSegActive = Active;
+    FexcSegManual = false;
+    FexcSegOffset = FexcSegBase = FexcSegBlock = nullptr;
+  }
+private:
+  bool FexcSegManual = false;
+  Ref FexcSegOffset {}, FexcSegBase {}, FexcSegBlock {};
+  Ref FexcSegmentCheck(const X86Tables::DecodedOp& Op, Ref Offset);
+  Ref FexcSegCheckedBase();
   Ref GetSegment(uint32_t Flags, uint32_t DefaultPrefix = FEXCore::X86Tables::DecodeFlags::FLAG_NO_PREFIX, bool Override = false);
 
   void UpdatePrefixFromSegment(Ref Segment, uint32_t SegmentReg);
@@ -1609,8 +1625,6 @@ private:
     return LoadSource(RegClass::FPR, Op, Operand, Flags, Options);
   }
 
-  std::optional<AddressMode> FexcRmwAddress(const X86Tables::DecodedOp& Op, IR::OpSize Size);
-  void FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, AddressMode& Address, IR::OpSize Size, bool Write, Ref* StoreData = nullptr, bool Rmw = false);
   Ref LoadSource_WithOpSize(RegClass Class, const X86Tables::DecodedOp& Op, const X86Tables::DecodedOperand& Operand, IR::OpSize OpSize,
                             uint32_t Flags, const LoadSourceOptions& Options = {});
   Ref LoadSourceGPR_WithOpSize(const X86Tables::DecodedOp& Op, const X86Tables::DecodedOperand& Operand, IR::OpSize OpSize, uint32_t Flags,

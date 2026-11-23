@@ -254,7 +254,6 @@ void OpDispatchBuilder::ADCOp(OpcodeArgs, uint32_t SrcIndex, bool DestRAX) {
   const auto Size = OpSizeFromDst(Op);
   const auto OpSize = std::max(OpSize::i32Bit, Size);
 
-  auto RmwAddress = FexcRmwAddress(Op, Size);
   Ref Before {};
   if (DestIsLockedMem(Op)) {
     auto ALUOp = IncrementByCarry(OpSize, Src);
@@ -262,8 +261,6 @@ void OpDispatchBuilder::ADCOp(OpcodeArgs, uint32_t SrcIndex, bool DestRAX) {
 
     Ref DestMem = MakeSegmentAddress(Op, Op->Dest);
     Before = _AtomicFetchAdd(Size, ALUOp, DestMem);
-  } else if (RmwAddress) {
-    Before = _LoadMemAutoTSO(RegClass::GPR, Size, *RmwAddress, Size);
   } else if (DestRAX) {
     Before = LoadGPRRegister(X86State::REG_RAX, OpSizeFromSrc(Op), 0, true);
   } else {
@@ -284,8 +281,6 @@ void OpDispatchBuilder::ADCOp(OpcodeArgs, uint32_t SrcIndex, bool DestRAX) {
 
   if (DestRAX) {
     StoreGPRResultWithZExtSemantics(X86State::REG_RAX, Result, OpSizeFromDst(Op));
-  } else if (RmwAddress) {
-    _StoreMemAutoTSO(RegClass::GPR, Size, *RmwAddress, Result, Size);
   } else if (!DestIsLockedMem(Op)) {
     StoreResultGPR(Op, Result);
   }
@@ -300,7 +295,6 @@ void OpDispatchBuilder::SBBOp(OpcodeArgs, uint32_t SrcIndex, bool DestRAX) {
   const auto OpSize = std::max(OpSize::i32Bit, Size);
 
   Ref Result {};
-  auto RmwAddress = FexcRmwAddress(Op, Size);
   Ref Before {};
   if (DestIsLockedMem(Op)) {
     HandledLock = true;
@@ -308,8 +302,6 @@ void OpDispatchBuilder::SBBOp(OpcodeArgs, uint32_t SrcIndex, bool DestRAX) {
     Ref DestMem = MakeSegmentAddress(Op, Op->Dest);
     auto SrcPlusCF = IncrementByCarry(OpSize, Src);
     Before = _AtomicFetchSub(Size, SrcPlusCF, DestMem);
-  } else if (RmwAddress) {
-    Before = _LoadMemAutoTSO(RegClass::GPR, Size, *RmwAddress, Size);
   } else if (DestRAX) {
     Before = LoadGPRRegister(X86State::REG_RAX, OpSizeFromSrc(Op), 0, true);
   } else {
@@ -320,8 +312,6 @@ void OpDispatchBuilder::SBBOp(OpcodeArgs, uint32_t SrcIndex, bool DestRAX) {
 
   if (DestRAX) {
     StoreGPRResultWithZExtSemantics(X86State::REG_RAX, Result, OpSizeFromDst(Op));
-  } else if (RmwAddress) {
-    _StoreMemAutoTSO(RegClass::GPR, Size, *RmwAddress, Result, Size);
   } else if (!DestIsLockedMem(Op)) {
     StoreResultGPR(Op, Result);
   }
@@ -1150,23 +1140,11 @@ void OpDispatchBuilder::CQOOp(OpcodeArgs) {
   StoreGPRResultWithZExtSemantics(X86State::REG_RDX, Upper, Size);
 }
 
-// Called only for the explicit memory operand of XCHG or the CAS path of CMPXCHG.
-Ref OpDispatchBuilder::FexcAtomicAddress(const X86Tables::DecodedOp& Op) {
-  const auto Prefix = Op->Flags & X86Tables::DecodeFlags::FLAG_SEGMENTS;
-  if (fexc_slice1 && !Is64BitMode &&
-      (Prefix == X86Tables::DecodeFlags::FLAG_FS_PREFIX || Prefix == X86Tables::DecodeFlags::FLAG_GS_PREFIX)) {
-    auto Address = DecodeAddress(Op, Op->Dest, MemoryAccessType::DEFAULT, true);
-    FexcCheckSegmentAddress(Op, Address, OpSizeFromSrc(Op), true);
-    return Address.Base;
-  }
-  return MakeSegmentAddress(Op, Op->Dest);
-}
-
 std::optional<Ref> OpDispatchBuilder::XCHGOpImpl(OpcodeArgs, Ref Src) {
   if (DestIsMem(Op)) {
     HandledLock = (Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_LOCK) != 0;
 
-    Ref Dest = FexcAtomicAddress(Op);
+    Ref Dest = MakeSegmentAddress(Op, Op->Dest);
     if (IsMonoBackpatcherBlock) {
       _MonoBackpatcherWrite(OpSizeFromSrc(Op), Src, Dest);
     } else {
@@ -2555,7 +2533,11 @@ void OpDispatchBuilder::BTOp(OpcodeArgs, uint32_t SrcIndex, BTAction Action) {
     }
   } else {
     // Load the address to the memory location
+    // natemu (M2 checkpoint C): through a limited FS or GS the unit's offset (the effective address plus the signed bit-string
+    // displacement, in 32 bits) is what is checked; formed below.
+    FexcSegManual = FexcSegActive;
     Ref Dest = MakeSegmentAddress(Op, Op->Dest);
+    FexcSegManual = false;
     // x86 accesses the complete operand-sized unit, even when the selected bit is in its first byte.
     const auto UnitShift = Size == 16 ? 4 : Size == 32 ? 5 : 6;
     const auto UnitSize = IR::SizeToOpSize(Size / 8);
@@ -2568,6 +2550,10 @@ void OpDispatchBuilder::BTOp(OpcodeArgs, uint32_t SrcIndex, BTAction Action) {
       auto EA = LoadSourceGPR_WithOpSize(Op, Op->Dest, OpSizeFromSrc(Op), Op->Flags, {.LoadData = false});
       EA = _Bfe(OpSize::i64Bit, 32, 0, _Add(OpSize::i64Bit, EA, Offset));
       Address = {.Base = AppendSegmentOffset(EA, Op->Flags), .AddrSize = OpSize::i64Bit};
+    }
+    if (FexcSegActive) {
+      Ref EA = Add(OpSize::i32Bit, Dest, Offset);
+      Address = {.Base = Add(OpSize::i32Bit, EA, FexcSegmentCheck(Op, EA)), .AddrSize = OpSize::i64Bit};
     }
 
     switch (Action) {
@@ -3036,9 +3022,13 @@ void OpDispatchBuilder::XLATOp(OpcodeArgs) {
   Ref Offset = LoadGPRRegister(X86State::REG_RAX, OpSize::i8Bit);
   // natemu I10: the effective address is RBX + AL, or with 0x67 EBX + AL truncated to 32 bits, then the FS/GS base (FEX added
   // the base to RBX first and never truncated).
-  AddressMode A = {.Segment = GetSegment(Op->Flags, X86Tables::DecodeFlags::FLAG_DS_PREFIX), .Base = LoadGPRRegister(X86State::REG_RBX),
+  AddressMode A = {.Segment = FexcSegActive ? nullptr : GetSegment(Op->Flags, X86Tables::DecodeFlags::FLAG_DS_PREFIX), .Base = LoadGPRRegister(X86State::REG_RBX),
                    .Index = Offset, .AddrSize = (Op->Flags & X86Tables::DecodeFlags::FLAG_ADDRESS_SIZE) ? OpSize::i32Bit : OpSize::i64Bit};
-  FexcCheckSegmentAddress(Op, A, OpSize::i8Bit, false);
+  if (FexcSegActive) {
+    // natemu (M2 checkpoint C): EBX + AL is the checked offset.
+    Ref EA = LoadEffectiveAddress(this, A, OpSize::i32Bit, false);
+    A = {.Segment = FexcSegmentCheck(Op, EA), .Base = EA, .AddrSize = OpSize::i32Bit};
+  }
   auto Res = _LoadMemGPRAutoTSO(OpSize::i8Bit, A, OpSize::i8Bit);
 
   StoreGPRRegister(X86State::REG_RAX, Res, OpSize::i8Bit);
@@ -4179,7 +4169,7 @@ void OpDispatchBuilder::CMPXCHGOp(OpcodeArgs) {
     auto Src3Lower = _Bfe(OpSize::i64Bit, OpSizeAsBits(Size), 0, Src3);
 
     // If this is a memory location then we want the pointer to it
-    Ref Src1 = FexcAtomicAddress(Op);
+    Ref Src1 = MakeSegmentAddress(Op, Op->Dest);
 
     // DataSrc = *Src1
     // if (DataSrc == Src3) { *Src1 == Src2; } Src2 = DataSrc
@@ -4362,9 +4352,11 @@ Ref OpDispatchBuilder::GetSegment(uint32_t Flags, uint32_t DefaultPrefix, bool O
       SegmentResult = _LoadContextGPR(GPRSize, offsetof(FEXCore::Core::CPUState, ds_cached));
       break;
     case FEXCore::X86Tables::DecodeFlags::FLAG_FS_PREFIX:
+      if (fexc_slice1 && (fexc_limited_segments & 1)) return FexcSegCheckedBase();
       SegmentResult = _LoadContextGPR(GPRSize, offsetof(FEXCore::Core::CPUState, fs_cached));
       break;
     case FEXCore::X86Tables::DecodeFlags::FLAG_GS_PREFIX:
+      if (fexc_slice1 && (fexc_limited_segments & 2)) return FexcSegCheckedBase();
       SegmentResult = _LoadContextGPR(GPRSize, offsetof(FEXCore::Core::CPUState, gs_cached));
       break;
     default: FEX_UNREACHABLE;
@@ -4374,6 +4366,30 @@ Ref OpDispatchBuilder::GetSegment(uint32_t Flags, uint32_t DefaultPrefix, bool O
     return SegmentResult;
   }
   return nullptr;
+}
+
+// natemu (M2 checkpoint C): the base of a limited FS or GS. An instruction that accesses nothing through it (LEA, a prefetch,
+// an immediate or register operand's decode) gets none; one that does gets the checked base, and only in the check's IR block;
+// anything else fails the compile, so no unchecked base is ever added.
+Ref OpDispatchBuilder::FexcSegCheckedBase() {
+  if (!FexcSegActive || FexcSegManual) return nullptr;
+  if (!FexcSegBase || FexcSegBlock != GetCurrentBlock()) {
+    DecodeFailure = true;
+    return nullptr;
+  }
+  return FexcSegBase;
+}
+
+Ref OpDispatchBuilder::FexcSegmentCheck(const X86Tables::DecodedOp& Op, Ref Offset) {
+  if (FexcSegBase) {
+    DecodeFailure = true;   // one operand, one check
+    return FexcSegBase;
+  }
+  const auto Prefix = Op->Flags & X86Tables::DecodeFlags::FLAG_SEGMENTS;
+  FexcSegOffset = Offset;
+  FexcSegBlock = GetCurrentBlock();
+  FexcSegBase = _FexcSegmentBase(Offset, Prefix == X86Tables::DecodeFlags::FLAG_FS_PREFIX ? 4 : 5);
+  return FexcSegBase;
 }
 
 Ref OpDispatchBuilder::AppendSegmentOffset(Ref Value, uint32_t Flags, uint32_t DefaultPrefix, bool Override) {
@@ -4604,7 +4620,18 @@ AddressMode OpDispatchBuilder::DecodeAddress(const X86Tables::DecodedOp& Op, con
   const auto GPRSize = GetGPROpSize();
 
   AddressMode A {};
-  A.Segment = GetSegment(Op->Flags);
+  // natemu (M2 checkpoint C): the memory operand through a limited FS or GS (a ModRM memory form, or moffs's literal; a VSIB
+  // form is the resident's). Its offset is formed below without a base, once: a second decode of the operand (a
+  // read-modify-write's store) reuses it, as x86 computes one effective address.
+  const bool FexcMoffs = Op->FexcMap == FEXC_MAP_PRIMARY && Op->OPRaw >= 0xA0 && Op->OPRaw <= 0xA3;
+  const bool FexcChecked = FexcSegActive && !FexcSegManual && (Operand.IsLiteral() ? FexcMoffs : !Operand.IsGPR()) &&
+                           !(Op->Flags & X86Tables::DecodeFlags::FLAG_VSIB_BYTE);
+  if (FexcChecked && FexcSegBase) {
+    return {.Segment = FexcSegCheckedBase(), .Base = FexcSegOffset, .AddrSize = GPRSize,
+            .NonTSO = AccessType == MemoryAccessType::NONTSO || AccessType == MemoryAccessType::STREAM};
+  }
+  // (No other operand of such an instruction has a segment: its register and immediate operands are decoded here too.)
+  A.Segment = FexcSegActive ? nullptr : GetSegment(Op->Flags);
   A.AddrSize = (Op->Flags & X86Tables::DecodeFlags::FLAG_ADDRESS_SIZE) != 0 ? (GPRSize >> 1) : GPRSize;
   A.NonTSO = AccessType == MemoryAccessType::NONTSO || AccessType == MemoryAccessType::STREAM;
 
@@ -4702,87 +4729,13 @@ AddressMode OpDispatchBuilder::DecodeAddress(const X86Tables::DecodedOp& Op, con
     LOGMAN_MSG_A_FMT("Unknown Src Type: {}\n", Operand.Type);
   }
 
+  if (FexcChecked) {
+    Ref Offset = LoadEffectiveAddress(this, A, OpSize::i32Bit, false);
+    return {.Segment = FexcSegmentCheck(Op, Offset), .Base = Offset, .AddrSize = GPRSize, .NonTSO = A.NonTSO};
+  }
   return A;
 }
 
-
-// Primary 00/01 through 30/31 are ADD..XOR r/m,r. Both effects consume the same checked offset.
-std::optional<AddressMode> OpDispatchBuilder::FexcRmwAddress(const X86Tables::DecodedOp& Op, IR::OpSize Size) {
-  const auto Segment = Op->Flags & X86Tables::DecodeFlags::FLAG_SEGMENTS;
-  if (!fexc_slice1 || Is64BitMode || Op->FexcMap != FEXC_MAP_PRIMARY || Op->OPRaw > 0x31 || (Op->OPRaw & 6) ||
-      !IsOperandMem(Op->Dest, true) || DestIsLockedMem(Op) ||
-      (Segment != X86Tables::DecodeFlags::FLAG_FS_PREFIX && Segment != X86Tables::DecodeFlags::FLAG_GS_PREFIX))
-    return std::nullopt;
-  auto Address = DecodeAddress(Op, Op->Dest, MemoryAccessType::DEFAULT, true);
-  FexcCheckSegmentAddress(Op, Address, Size, true, nullptr, true);
-  return Address;
-}
-
-// Scalar moves, single-read integer operands and read-modify-write integer operands.
-void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, AddressMode& Address, IR::OpSize Size, bool Write, Ref* StoreData, bool Rmw) {
-  const bool Move = Op->FexcMap == FEXC_MAP_PRIMARY && Op->OPRaw >= 0x88 && Op->OPRaw <= 0x8B;
-  const bool Extend = Op->FexcMap == FEXC_MAP_TWO && (Op->OPRaw == 0xB6 || Op->OPRaw == 0xB7 || Op->OPRaw == 0xBE || Op->OPRaw == 0xBF);
-  const bool Moffs = Op->FexcMap == FEXC_MAP_PRIMARY && Op->OPRaw >= 0xA0 && Op->OPRaw <= 0xA3;
-  const auto Raw = Op->OPRaw;
-  // Primary ALU opcodes 02/03 through 3A/3B place r/m in the source. CMP and TEST
-  // also read r/m as the first operand, including the compare/test immediate groups.
-  const auto Group = (Op->ModRM >> 3) & 7;
-  const bool AluSource = Op->FexcMap == FEXC_MAP_PRIMARY &&
-    ((Raw <= 0x3B && (Raw & 6) == 2) || Raw == 0x38 || Raw == 0x39 || Raw == 0x84 || Raw == 0x85 ||
-     ((Raw == 0x80 || Raw == 0x81 || Raw == 0x83) && Group == 7) || ((Raw == 0xF6 || Raw == 0xF7) && (Group == 0 || Group >= 4)));
-  // All of these read the ModRM operand before selecting, counting or transforming its value.
-  // The 0F38 decoder retains the 66/F2 prefix bits in bits 8/9 of its 16-bit table index OP.
-  const bool BmiSource = Op->FexcMap == FEXC_MAP_VEX && !Write && Size == OpSize::i32Bit &&
-    FexcBmiEncoding(Op->FexcVex, Op->FexcVexOp, Op->Flags & X86Tables::DecodeFlags::FLAG_DECODED_MODRM, Group) != FexcBmiFamily::None;
-  const bool RegSource = BmiSource ||
-    (Op->FexcMap == FEXC_MAP_PRIMARY && (Raw == 0x69 || Raw == 0x6B)) ||
-    (Op->FexcMap == FEXC_MAP_TWO && ((Raw >= 0x40 && Raw <= 0x4F) || Raw == 0xAF || Raw == 0xBC || Raw == 0xBD)) ||
-    (Op->FexcMap == FEXC_MAP_TWO_F3 && (Raw == 0xB8 || Raw == 0xBC || Raw == 0xBD)) ||
-    (Op->FexcMap == FEXC_MAP_0F38 && ((Op->OP & ~0x100U) == 0xF0 || (Op->OP & ~0x101U) == 0x2F0));
-  const bool IntegerStore = StoreData &&
-    ((Op->FexcMap == FEXC_MAP_TWO && ((Raw >= 0x90 && Raw <= 0x9f && Size == OpSize::i8Bit) ||
-                                      (Raw == 0xc3 && Size == OpSize::i32Bit))) ||
-     (Op->FexcMap == FEXC_MAP_0F38 && (Op->OP & ~0x100U) == 0xf1 && (Size == OpSize::i16Bit || Size == OpSize::i32Bit)));
-  const bool CompareExchange = Write && Op->FexcMap == FEXC_MAP_TWO && (Raw & ~1U) == 0xB0 && (Op->Flags & X86Tables::DecodeFlags::FLAG_LOCK);
-  const bool Exchange = Op->FexcMap == FEXC_MAP_PRIMARY && (Raw & ~1U) == 0x86;
-  const bool ImmediateStore = StoreData && Op->FexcMap == FEXC_MAP_PRIMARY && (Op->OPRaw == 0xC6 || Op->OPRaw == 0xC7) && !(Op->ModRM & 0x38);
-  // Only the unaligned packed 128-bit MOV memory-source forms. The front end has
-  // already validated the VEX encoding and handled its FP control gates.
-  const bool QMove = !Write && Size == OpSize::i128Bit &&
-    (((Op->FexcMap == FEXC_MAP_TWO || Op->FexcMap == FEXC_MAP_TWO_66) && Raw == 0x10) ||
-     (Op->FexcMap == FEXC_MAP_VEX && (Op->FexcVex == 1 || Op->FexcVex == 5) && Op->FexcVexOp == 0x10));
-  const bool Xlat = Op->FexcMap == FEXC_MAP_PRIMARY && Raw == 0xD7;
-  if (!fexc_slice1 || Is64BitMode || !(Move || Extend || Moffs || AluSource || RegSource || ImmediateStore || IntegerStore || Rmw || Xlat || Exchange || CompareExchange || QMove))
-    return;
-  const auto Prefix = Op->Flags & X86Tables::DecodeFlags::FLAG_SEGMENTS;
-  if (Prefix != X86Tables::DecodeFlags::FLAG_FS_PREFIX && Prefix != X86Tables::DecodeFlags::FLAG_GS_PREFIX)
-    return;
-  Address.Segment = nullptr;
-  // A0..A3 take the 32-bit offset literally. Keep it identifiable through register allocation
-  // so admission can compare both native immediate halves with the original instruction.
-  Ref Offset;
-  if (Moffs) {
-    const auto& Literal = Op->Src[0];
-    const uint32_t Value = Literal.IsLiteralRelocation() ? Entry + Literal.Data.LiteralRelocation.EntrypointOffset : Literal.Literal();
-    Offset = _InlineConstant(Value);
-  } else {
-    Offset = LoadEffectiveAddress(this, Address, OpSize::i32Bit, true);
-  }
-  if (ImmediateStore) {
-    // The same register supplies the native store and a wrapped store at the preceding descriptor check.
-    const unsigned Bytes = IR::OpSizeToSize(Size);
-    const uint8_t* Field = fexc_guest_bytes(Op->PC + Op->InstSize - Bytes, Bytes);
-    uint32_t Value = 0;
-    memcpy(&Value, Field, Bytes);
-    *StoreData = _FexcStoreImmediate(Value);
-  }
-  // Bits 5:4 describe an extending result (16/32 bits), bit 6 sign extension.
-  const uint8_t Result = CompareExchange ? 0x70 : Exchange ? 0x40 : Rmw ? 0x30 : AluSource || RegSource || Xlat || QMove ? 0x80 : Extend ? (OpSizeFromDst(Op) == OpSize::i16Bit ? 0x10 : 0x20) | (Op->OPRaw >= 0xBE ? 0x40 : 0) : 0;
-  // The runtime translates 32-bit compatibility code only at CPL3. The RO view belongs to that address space.
-  const bool InlineDword = !fexc_cpl0 && Move && (Raw == 0x89 || Raw == 0x8B) && Size == OpSize::i32Bit;
-  Ref Linear = _FexcSegmentAddress(Offset, Prefix == X86Tables::DecodeFlags::FLAG_FS_PREFIX ? 4 : 5, IR::OpSizeToSize(Size), Write, Result, InlineDword);
-  Address = {.Base = Linear, .AddrSize = OpSize::i64Bit, .NonTSO = Address.NonTSO};
-}
 
 Ref OpDispatchBuilder::LoadSource_WithOpSize(RegClass Class, const X86Tables::DecodedOp& Op, const X86Tables::DecodedOperand& Operand,
                                              IR::OpSize OpSize, uint32_t Flags, const LoadSourceOptions& Options) {
@@ -4821,7 +4774,6 @@ Ref OpDispatchBuilder::LoadSource_WithOpSize(RegClass Class, const X86Tables::De
 
   const bool ShouldLoad = (IsOperandMem(Operand, true) && LoadData) || ForceLoad;
   if (ShouldLoad) {
-    FexcCheckSegmentAddress(Op, A, OpSize, false);
     if (OpSize == OpSize::f80Bit) {
       Ref MemSrc = LoadEffectiveAddress(this, A, GetGPROpSize(), true);
       if (CTX->HostFeatures.SupportsSVE()) {
@@ -4960,7 +4912,6 @@ void OpDispatchBuilder::StoreResult_WithOpSize(RegClass Class, FEXCore::X86Table
   }
 
   AddressMode A = DecodeAddress(Op, Operand, AccessType, false /* IsLoad */);
-  FexcCheckSegmentAddress(Op, A, OpSize, true, &Src);
 
   if (OpSize == OpSize::f80Bit) {
     Ref MemStoreDst = LoadEffectiveAddress(this, A, GetGPROpSize(), true);
@@ -5098,15 +5049,12 @@ void OpDispatchBuilder::ALUOp(OpcodeArgs, FEXCore::IR::IROps ALUIROp, FEXCore::I
 
   Ref Result {};
   Ref Dest {};
-  auto RmwAddress = FexcRmwAddress(Op, Size);
 
   if (DestIsLockedMem(Op)) {
     HandledLock = true;
     Ref DestMem = MakeSegmentAddress(Op, Op->Dest);
     DeriveOp(FetchOp, AtomicFetchOp, _AtomicFetchAdd(Size, Src, DestMem));
     Dest = FetchOp;
-  } else if (RmwAddress) {
-    Dest = _LoadMemAutoTSO(RegClass::GPR, Size, *RmwAddress, Size);
   } else if (DestRAX) {
     Dest = LoadGPRRegister(X86State::REG_RAX, OpSizeFromSrc(Op), 0, true);
   } else {
@@ -5145,8 +5093,6 @@ void OpDispatchBuilder::ALUOp(OpcodeArgs, FEXCore::IR::IROps ALUIROp, FEXCore::I
 
   if (DestRAX) {
     StoreGPRResultWithZExtSemantics(X86State::REG_RAX, Result, ResultSize);
-  } else if (RmwAddress) {
-    _StoreMemAutoTSO(RegClass::GPR, Size, *RmwAddress, Result, Size);
   } else if (!DestIsLockedMem(Op)) {
     StoreResultGPR_WithOpSize(Op, Op->Dest, Result, ResultSize, OpSize::iInvalid, MemoryAccessType::DEFAULT);
   }
@@ -5305,12 +5251,7 @@ void OpDispatchBuilder::MOVBEOp(OpcodeArgs) {
   const auto GPRSize = GetGPROpSize();
   const auto SrcSize = OpSizeFromSrc(Op);
 
-  // Reversing the low word discards every upper bit. Keep the original GPR as the
-  // REV source so the compatibility store can prove its capture at the bank check.
-  const auto Segment = Op->Flags & X86Tables::DecodeFlags::FLAG_SEGMENTS;
-  const bool Checked = fexc_slice1 && !Is64BitMode && DestIsMem(Op) &&
-    (Segment == X86Tables::DecodeFlags::FLAG_FS_PREFIX || Segment == X86Tables::DecodeFlags::FLAG_GS_PREFIX);
-  Ref Src = LoadSourceGPR(Op, Op->Src[0], Op->Flags, {.Align = OpSize::i8Bit, .AllowUpperGarbage = Checked});
+  Ref Src = LoadSourceGPR(Op, Op->Src[0], Op->Flags, {.Align = OpSize::i8Bit});
 
   if (DestIsMem(Op) || SrcSize != OpSize::i16Bit) {
     Src = _Rev(SrcSize, Src);
