@@ -4727,7 +4727,7 @@ void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, 
   const auto Group = (Op->ModRM >> 3) & 7;
   const bool AluSource = Op->FexcMap == FEXC_MAP_PRIMARY &&
     ((Raw <= 0x3B && (Raw & 6) == 2) || Raw == 0x38 || Raw == 0x39 || Raw == 0x84 || Raw == 0x85 ||
-     ((Raw == 0x80 || Raw == 0x81 || Raw == 0x83) && Group == 7) || ((Raw == 0xF6 || Raw == 0xF7) && Group == 0));
+     ((Raw == 0x80 || Raw == 0x81 || Raw == 0x83) && Group == 7) || ((Raw == 0xF6 || Raw == 0xF7) && (Group == 0 || Group >= 4)));
   // All of these read the ModRM operand before selecting, counting or transforming its value.
   // The 0F38 decoder retains the 66/F2 prefix bits in bits 8/9 of its 16-bit table index OP.
   const bool RegSource =
