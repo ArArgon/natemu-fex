@@ -4739,11 +4739,15 @@ void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, 
     (Op->FexcMap == FEXC_MAP_TWO && ((Raw >= 0x40 && Raw <= 0x4F) || Raw == 0xAF || Raw == 0xBC || Raw == 0xBD)) ||
     (Op->FexcMap == FEXC_MAP_TWO_F3 && (Raw == 0xB8 || Raw == 0xBC || Raw == 0xBD)) ||
     (Op->FexcMap == FEXC_MAP_0F38 && ((Op->OP & ~0x100U) == 0xF0 || (Op->OP & ~0x101U) == 0x2F0));
+  const bool IntegerStore = StoreData &&
+    ((Op->FexcMap == FEXC_MAP_TWO && ((Raw >= 0x90 && Raw <= 0x9f && Size == OpSize::i8Bit) ||
+                                      (Raw == 0xc3 && Size == OpSize::i32Bit))) ||
+     (Op->FexcMap == FEXC_MAP_0F38 && (Op->OP & ~0x100U) == 0xf1 && (Size == OpSize::i16Bit || Size == OpSize::i32Bit)));
   const bool CompareExchange = Write && Op->FexcMap == FEXC_MAP_TWO && (Raw & ~1U) == 0xB0 && (Op->Flags & X86Tables::DecodeFlags::FLAG_LOCK);
   const bool Exchange = Op->FexcMap == FEXC_MAP_PRIMARY && (Raw & ~1U) == 0x86;
   const bool ImmediateStore = StoreData && Op->FexcMap == FEXC_MAP_PRIMARY && (Op->OPRaw == 0xC6 || Op->OPRaw == 0xC7) && !(Op->ModRM & 0x38);
   const bool Xlat = Op->FexcMap == FEXC_MAP_PRIMARY && Raw == 0xD7;
-  if (!fexc_slice1 || Is64BitMode || !(Move || Extend || Moffs || AluSource || RegSource || ImmediateStore || Rmw || Xlat || Exchange || CompareExchange))
+  if (!fexc_slice1 || Is64BitMode || !(Move || Extend || Moffs || AluSource || RegSource || ImmediateStore || IntegerStore || Rmw || Xlat || Exchange || CompareExchange))
     return;
   const auto Prefix = Op->Flags & X86Tables::DecodeFlags::FLAG_SEGMENTS;
   if (Prefix != X86Tables::DecodeFlags::FLAG_FS_PREFIX && Prefix != X86Tables::DecodeFlags::FLAG_GS_PREFIX)
@@ -5296,7 +5300,12 @@ void OpDispatchBuilder::MOVBEOp(OpcodeArgs) {
   const auto GPRSize = GetGPROpSize();
   const auto SrcSize = OpSizeFromSrc(Op);
 
-  Ref Src = LoadSourceGPR(Op, Op->Src[0], Op->Flags, {.Align = OpSize::i8Bit});
+  // Reversing the low word discards every upper bit. Keep the original GPR as the
+  // REV source so the compatibility store can prove its capture at the bank check.
+  const auto Segment = Op->Flags & X86Tables::DecodeFlags::FLAG_SEGMENTS;
+  const bool Checked = fexc_slice1 && !Is64BitMode && DestIsMem(Op) &&
+    (Segment == X86Tables::DecodeFlags::FLAG_FS_PREFIX || Segment == X86Tables::DecodeFlags::FLAG_GS_PREFIX);
+  Ref Src = LoadSourceGPR(Op, Op->Src[0], Op->Flags, {.Align = OpSize::i8Bit, .AllowUpperGarbage = Checked});
 
   if (DestIsMem(Op) || SrcSize != OpSize::i16Bit) {
     Src = _Rev(SrcSize, Src);
