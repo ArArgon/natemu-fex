@@ -1514,7 +1514,8 @@ void OpDispatchBuilder::SHLDOp(OpcodeArgs) {
   auto Tmp1 = _Lshl(OpSize::i64Bit, Dest, Shift);
   auto Tmp2 = _Lshr(Size == 64 ? OpSize::i64Bit : OpSize::i32Bit, Src, ShiftRight);
 
-  Ref Res = _Or(OpSize::i64Bit, Tmp1, Tmp2);
+  // natemu: in 32-bit code a 32-bit result leaves its register's upper half zero (Tmp1 holds bits above 31).
+  Ref Res = _Or(fexc_slice1 && !Is64BitMode && Size == 32 ? OpSize::i32Bit : OpSize::i64Bit, Tmp1, Tmp2);
 
   // If shift count was zero then output doesn't change
   // Needs to be checked for the 32bit operand case
@@ -1586,7 +1587,8 @@ void OpDispatchBuilder::SHRDOp(OpcodeArgs) {
   auto Tmp1 = _Lshr(Size == 64 ? OpSize::i64Bit : OpSize::i32Bit, Dest, Shift);
   auto Tmp2 = _Lshl(OpSize::i64Bit, Src, ShiftLeft);
 
-  Ref Res = _Or(OpSize::i64Bit, Tmp1, Tmp2);
+  // natemu: in 32-bit code a 32-bit result leaves its register's upper half zero (Tmp2 holds bits above 31).
+  Ref Res = _Or(fexc_slice1 && !Is64BitMode && Size == 32 ? OpSize::i32Bit : OpSize::i64Bit, Tmp1, Tmp2);
 
   // If shift count was zero then output doesn't change
   // Needs to be checked for the 32bit operand case
