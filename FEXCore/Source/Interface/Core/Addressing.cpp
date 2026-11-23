@@ -58,8 +58,9 @@ AddressMode SelectAddressMode(IREmitter* IREmit, const AddressMode& A, IR::OpSiz
   const auto Is32Bit = GPRSize == OpSize::i32Bit;
   const auto GPRSizeMatchesAddrSize = A.AddrSize == GPRSize;
   const auto OffsetIndexToLargeFor32Bit = Is32Bit && (A.Offset <= -16384 || A.Offset >= 16384);
-  // A native offset is added in 64 bits. For a system guest the 32-bit sum must already be wrapped at the access site.
-  if (!GPRSizeMatchesAddrSize || OffsetIndexToLargeFor32Bit || (fexc_slice1 && Is32Bit)) {
+  // natemu: a folded offset is added in 64 bits, so a 32-bit sum that should wrap lands above 4 GiB (or below 0). 32-bit
+  // code runs with nothing mapped there, and the resident makes the access again at the wrapped address.
+  if (!GPRSizeMatchesAddrSize || OffsetIndexToLargeFor32Bit) {
     // If address size doesn't match GPR size then no optimizations can occur.
     return {
       .Base = LoadEffectiveAddress(IREmit, A, GPRSize, true),

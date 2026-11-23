@@ -1477,16 +1477,6 @@ DEF_OP(Push) {
   const auto AddrSrc = GetReg(Op->Addr);
   const auto Dst = GetReg(Node);
 
-  if (Op->Predecremented) {
-    switch (ValueSize) {
-    case 2: strh(Src.W(), AddrSrc); break;
-    case 4: str(Src.W(), AddrSrc); break;
-    default: LOGMAN_THROW_A_FMT(false, "Invalid 32-bit push width {}", ValueSize);
-    }
-    if (Dst != AddrSrc) mov(ARMEmitter::Size::i32Bit, Dst, AddrSrc);
-    return;
-  }
-
   bool NeedsMoveAfterwards = false;
   if (Dst != AddrSrc) {
     if (Dst == Src || fexc_slice1) {
@@ -1601,16 +1591,6 @@ DEF_OP(Pop) {
   const auto Dst = GetReg(Op->OutValue);
 
   LOGMAN_THROW_A_FMT(Dst != Addr, "Invalid");
-
-  if (fexc_slice1 && fexc_bits32) {
-    switch (Size) {
-    case 2: ldrh(Dst.W(), Addr); break;
-    case 4: ldr(Dst.W(), Addr); break;
-    default: LOGMAN_THROW_A_FMT(false, "Invalid 32-bit pop width {}", Size);
-    }
-    add(ARMEmitter::Size::i32Bit, Addr, Addr, Size);
-    return;
-  }
 
   switch (Size) {
   case 1: {
