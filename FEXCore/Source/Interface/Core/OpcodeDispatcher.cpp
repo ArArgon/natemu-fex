@@ -4730,7 +4730,9 @@ void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, 
      ((Raw == 0x80 || Raw == 0x81 || Raw == 0x83) && Group == 7) || ((Raw == 0xF6 || Raw == 0xF7) && (Group == 0 || Group >= 4)));
   // All of these read the ModRM operand before selecting, counting or transforming its value.
   // The 0F38 decoder retains the 66/F2 prefix bits in bits 8/9 of its 16-bit table index OP.
-  const bool RegSource =
+  const bool BmiSource = Op->FexcMap == FEXC_MAP_VEX && !Write && Size == OpSize::i32Bit &&
+    FexcBmiEncoding(Op->FexcVex, Op->FexcVexOp, Op->Flags & X86Tables::DecodeFlags::FLAG_DECODED_MODRM, Group) != FexcBmiFamily::None;
+  const bool RegSource = BmiSource ||
     (Op->FexcMap == FEXC_MAP_PRIMARY && (Raw == 0x69 || Raw == 0x6B)) ||
     (Op->FexcMap == FEXC_MAP_TWO && ((Raw >= 0x40 && Raw <= 0x4F) || Raw == 0xAF || Raw == 0xBC || Raw == 0xBD)) ||
     (Op->FexcMap == FEXC_MAP_TWO_F3 && (Raw == 0xB8 || Raw == 0xBC || Raw == 0xBD)) ||
