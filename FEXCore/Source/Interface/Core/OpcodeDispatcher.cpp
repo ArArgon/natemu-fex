@@ -4683,13 +4683,18 @@ AddressMode OpDispatchBuilder::DecodeAddress(const X86Tables::DecodedOp& Op, con
 }
 
 
-// The scalar MOV slice: the operand's architectural width equals its one memory transfer.
+// Scalar moves and read-only integer ALU operands with one architectural transfer.
 void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, AddressMode& Address, IR::OpSize Size, bool Write) {
   const bool Move = Op->FexcMap == FEXC_MAP_PRIMARY && Op->OPRaw >= 0x88 && Op->OPRaw <= 0x8B;
   const bool Extend = Op->FexcMap == FEXC_MAP_TWO && (Op->OPRaw == 0xB6 || Op->OPRaw == 0xB7 || Op->OPRaw == 0xBE || Op->OPRaw == 0xBF);
   const bool Moffs = Op->FexcMap == FEXC_MAP_PRIMARY && Op->OPRaw >= 0xA0 && Op->OPRaw <= 0xA3;
   const auto Raw = Op->OPRaw;
-  const bool AluSource = Op->FexcMap == FEXC_MAP_PRIMARY && ((Raw & ~1U) == 0x2A || (Raw & ~1U) == 0x32 || (Raw & ~1U) == 0x3A);
+  // Primary ALU opcodes 02/03 through 3A/3B place r/m in the source. CMP and TEST
+  // also read r/m as the first operand, including the compare/test immediate groups.
+  const auto Group = (Op->ModRM >> 3) & 7;
+  const bool AluSource = Op->FexcMap == FEXC_MAP_PRIMARY &&
+    ((Raw <= 0x3B && (Raw & 6) == 2) || Raw == 0x38 || Raw == 0x39 || Raw == 0x84 || Raw == 0x85 ||
+     ((Raw == 0x80 || Raw == 0x81 || Raw == 0x83) && Group == 7) || ((Raw == 0xF6 || Raw == 0xF7) && Group == 0));
   if (!fexc_slice1 || Is64BitMode || !(Move || Extend || Moffs || AluSource))
     return;
   const auto Prefix = Op->Flags & X86Tables::DecodeFlags::FLAG_SEGMENTS;
