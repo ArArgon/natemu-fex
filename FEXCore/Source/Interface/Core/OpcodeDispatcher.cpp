@@ -1150,21 +1150,23 @@ void OpDispatchBuilder::CQOOp(OpcodeArgs) {
   StoreGPRResultWithZExtSemantics(X86State::REG_RDX, Upper, Size);
 }
 
+// Called only for the explicit memory operand of XCHG or the CAS path of CMPXCHG.
+Ref OpDispatchBuilder::FexcAtomicAddress(const X86Tables::DecodedOp& Op) {
+  const auto Prefix = Op->Flags & X86Tables::DecodeFlags::FLAG_SEGMENTS;
+  if (fexc_slice1 && !Is64BitMode &&
+      (Prefix == X86Tables::DecodeFlags::FLAG_FS_PREFIX || Prefix == X86Tables::DecodeFlags::FLAG_GS_PREFIX)) {
+    auto Address = DecodeAddress(Op, Op->Dest, MemoryAccessType::DEFAULT, true);
+    FexcCheckSegmentAddress(Op, Address, OpSizeFromSrc(Op), true);
+    return Address.Base;
+  }
+  return MakeSegmentAddress(Op, Op->Dest);
+}
+
 std::optional<Ref> OpDispatchBuilder::XCHGOpImpl(OpcodeArgs, Ref Src) {
   if (DestIsMem(Op)) {
     HandledLock = (Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_LOCK) != 0;
 
-    const auto Prefix = Op->Flags & X86Tables::DecodeFlags::FLAG_SEGMENTS;
-    const bool Checked = fexc_slice1 && !Is64BitMode && Op->FexcMap == FEXC_MAP_PRIMARY && (Op->OPRaw & ~1U) == 0x86 &&
-                         (Prefix == X86Tables::DecodeFlags::FLAG_FS_PREFIX || Prefix == X86Tables::DecodeFlags::FLAG_GS_PREFIX);
-    Ref Dest;
-    if (Checked) {
-      auto Address = DecodeAddress(Op, Op->Dest, MemoryAccessType::DEFAULT, true);
-      FexcCheckSegmentAddress(Op, Address, OpSizeFromSrc(Op), true);
-      Dest = Address.Base;
-    } else {
-      Dest = MakeSegmentAddress(Op, Op->Dest);
-    }
+    Ref Dest = FexcAtomicAddress(Op);
     if (IsMonoBackpatcherBlock) {
       _MonoBackpatcherWrite(OpSizeFromSrc(Op), Src, Dest);
     } else {
@@ -4177,7 +4179,7 @@ void OpDispatchBuilder::CMPXCHGOp(OpcodeArgs) {
     auto Src3Lower = _Bfe(OpSize::i64Bit, OpSizeAsBits(Size), 0, Src3);
 
     // If this is a memory location then we want the pointer to it
-    Ref Src1 = MakeSegmentAddress(Op, Op->Dest);
+    Ref Src1 = FexcAtomicAddress(Op);
 
     // DataSrc = *Src1
     // if (DataSrc == Src3) { *Src1 == Src2; } Src2 = DataSrc
@@ -4737,10 +4739,11 @@ void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, 
     (Op->FexcMap == FEXC_MAP_TWO && ((Raw >= 0x40 && Raw <= 0x4F) || Raw == 0xAF || Raw == 0xBC || Raw == 0xBD)) ||
     (Op->FexcMap == FEXC_MAP_TWO_F3 && (Raw == 0xB8 || Raw == 0xBC || Raw == 0xBD)) ||
     (Op->FexcMap == FEXC_MAP_0F38 && ((Op->OP & ~0x100U) == 0xF0 || (Op->OP & ~0x101U) == 0x2F0));
+  const bool CompareExchange = Write && Op->FexcMap == FEXC_MAP_TWO && (Raw & ~1U) == 0xB0 && (Op->Flags & X86Tables::DecodeFlags::FLAG_LOCK);
   const bool Exchange = Op->FexcMap == FEXC_MAP_PRIMARY && (Raw & ~1U) == 0x86;
   const bool ImmediateStore = StoreData && Op->FexcMap == FEXC_MAP_PRIMARY && (Op->OPRaw == 0xC6 || Op->OPRaw == 0xC7) && !(Op->ModRM & 0x38);
   const bool Xlat = Op->FexcMap == FEXC_MAP_PRIMARY && Raw == 0xD7;
-  if (!fexc_slice1 || Is64BitMode || !(Move || Extend || Moffs || AluSource || RegSource || ImmediateStore || Rmw || Xlat || Exchange))
+  if (!fexc_slice1 || Is64BitMode || !(Move || Extend || Moffs || AluSource || RegSource || ImmediateStore || Rmw || Xlat || Exchange || CompareExchange))
     return;
   const auto Prefix = Op->Flags & X86Tables::DecodeFlags::FLAG_SEGMENTS;
   if (Prefix != X86Tables::DecodeFlags::FLAG_FS_PREFIX && Prefix != X86Tables::DecodeFlags::FLAG_GS_PREFIX)
@@ -4765,7 +4768,7 @@ void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, 
     *StoreData = _FexcStoreImmediate(Value);
   }
   // Bits 5:4 describe an extending result (16/32 bits), bit 6 sign extension.
-  const uint8_t Result = Exchange ? 0x40 : Rmw ? 0x30 : AluSource || RegSource || Xlat ? 0x80 : Extend ? (OpSizeFromDst(Op) == OpSize::i16Bit ? 0x10 : 0x20) | (Op->OPRaw >= 0xBE ? 0x40 : 0) : 0;
+  const uint8_t Result = CompareExchange ? 0x70 : Exchange ? 0x40 : Rmw ? 0x30 : AluSource || RegSource || Xlat ? 0x80 : Extend ? (OpSizeFromDst(Op) == OpSize::i16Bit ? 0x10 : 0x20) | (Op->OPRaw >= 0xBE ? 0x40 : 0) : 0;
   // The runtime translates 32-bit compatibility code only at CPL3. The RO view belongs to that address space.
   const bool InlineDword = !fexc_cpl0 && Move && (Raw == 0x89 || Raw == 0x8B) && Size == OpSize::i32Bit;
   Ref Linear = _FexcSegmentAddress(Offset, Prefix == X86Tables::DecodeFlags::FLAG_FS_PREFIX ? 4 : 5, IR::OpSizeToSize(Size), Write, Result, InlineDword);

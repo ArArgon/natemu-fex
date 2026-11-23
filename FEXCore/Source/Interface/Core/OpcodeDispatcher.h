@@ -409,6 +409,7 @@ public:
   void SETccOp(OpcodeArgs);
   void CQOOp(OpcodeArgs);
   void CDQOp(OpcodeArgs);
+  Ref FexcAtomicAddress(const X86Tables::DecodedOp& Op);
   std::optional<Ref> XCHGOpImpl(OpcodeArgs, Ref Src);
   void XCHGOp(OpcodeArgs);
   void XCHGRAXOp(OpcodeArgs);
