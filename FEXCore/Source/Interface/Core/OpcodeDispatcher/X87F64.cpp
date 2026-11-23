@@ -128,7 +128,10 @@ void OpDispatchBuilder::FISTF64(OpcodeArgs, bool Truncate) {
   // push onto a full stack then leaves the unit and both instructions run alone; with the check inline the FILD would push
   // the indefinite and this store would still write the integer it read: the review of the pair.)
   if (fexc_slice1 && Size == OpSize::i64Bit && FexcFild64.Raw && FexcFild64.Block == GetCurrentBlock() && FexcFild64.Rip < Op->PC &&
-      (Op->TableInfo->Flags & X86Tables::InstFlags::FLAGS_POP) != 0 && !fexc_step_unit && uint64_t(fexc_x87_unmasked) == 0) {
+      (Op->TableInfo->Flags & X86Tables::InstFlags::FLAGS_POP) != 0 && !fexc_step_unit && uint64_t(fexc_x87_unmasked) == 0 &&
+      // natemu (M2 checkpoint C): not through a limited FS or GS: the integer is kept for the rerun only when the store faults,
+      // and this store's operand check can fault first.
+      !FexcSegActive) {
     // ST(0) is the FILD's value untouched when no x87 or MMX instruction lies between the two.
     const auto Next = [&](const auto& S) { const auto It = S.upper_bound(FexcFild64.Rip); return It == S.end() ? ~0ull : *It; };
     if (Next(fexc_x87) >= Op->PC && Next(fexc_x87_waiting) >= Op->PC) {
