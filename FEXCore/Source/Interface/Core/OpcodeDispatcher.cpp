@@ -4766,7 +4766,9 @@ void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, 
   }
   // Bits 5:4 describe an extending result (16/32 bits), bit 6 sign extension.
   const uint8_t Result = Exchange ? 0x40 : Rmw ? 0x30 : AluSource || RegSource || Xlat ? 0x80 : Extend ? (OpSizeFromDst(Op) == OpSize::i16Bit ? 0x10 : 0x20) | (Op->OPRaw >= 0xBE ? 0x40 : 0) : 0;
-  Ref Linear = _FexcSegmentAddress(Offset, Prefix == X86Tables::DecodeFlags::FLAG_FS_PREFIX ? 4 : 5, IR::OpSizeToSize(Size), Write, Result);
+  // The runtime translates 32-bit compatibility code only at CPL3. The RO view belongs to that address space.
+  const bool InlineDword = !fexc_cpl0 && Move && (Raw == 0x89 || Raw == 0x8B) && Size == OpSize::i32Bit;
+  Ref Linear = _FexcSegmentAddress(Offset, Prefix == X86Tables::DecodeFlags::FLAG_FS_PREFIX ? 4 : 5, IR::OpSizeToSize(Size), Write, Result, InlineDword);
   Address = {.Base = Linear, .AddrSize = OpSize::i64Bit, .NonTSO = Address.NonTSO};
 }
 
