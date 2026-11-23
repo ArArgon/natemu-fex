@@ -5077,9 +5077,7 @@ void OpDispatchBuilder::ALUOp(OpcodeArgs, FEXCore::IR::IROps ALUIROp, FEXCore::I
     DeriveOp(FetchOp, AtomicFetchOp, _AtomicFetchAdd(Size, Src, DestMem));
     Dest = FetchOp;
   } else if (RmwAddress) {
-    Rmwress = DecodeAddress(Op, Op->Dest, MemoryAccessType::DEFAULT, true);
-    FexcCheckSegmentAddress(Op, Rmwress, Size, true, nullptr, true);
-    Dest = _LoadMemAutoTSO(RegClass::GPR, Size, Rmwress, Size);
+    Dest = _LoadMemAutoTSO(RegClass::GPR, Size, *RmwAddress, Size);
   } else if (DestRAX) {
     Dest = LoadGPRRegister(X86State::REG_RAX, OpSizeFromSrc(Op), 0, true);
   } else {
@@ -5119,7 +5117,7 @@ void OpDispatchBuilder::ALUOp(OpcodeArgs, FEXCore::IR::IROps ALUIROp, FEXCore::I
   if (DestRAX) {
     StoreGPRResultWithZExtSemantics(X86State::REG_RAX, Result, ResultSize);
   } else if (RmwAddress) {
-    _StoreMemAutoTSO(RegClass::GPR, Size, Rmwress, Result, Size);
+    _StoreMemAutoTSO(RegClass::GPR, Size, *RmwAddress, Result, Size);
   } else if (!DestIsLockedMem(Op)) {
     StoreResultGPR_WithOpSize(Op, Op->Dest, Result, ResultSize, OpSize::iInvalid, MemoryAccessType::DEFAULT);
   }
