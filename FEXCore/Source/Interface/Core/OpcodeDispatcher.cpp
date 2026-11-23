@@ -4688,7 +4688,9 @@ void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, 
   const bool Move = Op->FexcMap == FEXC_MAP_PRIMARY && Op->OPRaw >= 0x88 && Op->OPRaw <= 0x8B;
   const bool Extend = Op->FexcMap == FEXC_MAP_TWO && (Op->OPRaw == 0xB6 || Op->OPRaw == 0xB7 || Op->OPRaw == 0xBE || Op->OPRaw == 0xBF);
   const bool Moffs = Op->FexcMap == FEXC_MAP_PRIMARY && Op->OPRaw >= 0xA0 && Op->OPRaw <= 0xA3;
-  if (!fexc_slice1 || Is64BitMode || !(Move || Extend || Moffs))
+  const auto Raw = Op->OPRaw;
+  const bool AluSource = Op->FexcMap == FEXC_MAP_PRIMARY && ((Raw & ~1U) == 0x2A || (Raw & ~1U) == 0x32 || (Raw & ~1U) == 0x3A);
+  if (!fexc_slice1 || Is64BitMode || !(Move || Extend || Moffs || AluSource))
     return;
   const auto Prefix = Op->Flags & X86Tables::DecodeFlags::FLAG_SEGMENTS;
   if (Prefix != X86Tables::DecodeFlags::FLAG_FS_PREFIX && Prefix != X86Tables::DecodeFlags::FLAG_GS_PREFIX)
@@ -4705,7 +4707,7 @@ void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, 
     Offset = LoadEffectiveAddress(this, Address, OpSize::i32Bit, true);
   }
   // Bits 5:4 describe an extending result (16/32 bits), bit 6 sign extension.
-  const uint8_t Result = Extend ? (OpSizeFromDst(Op) == OpSize::i16Bit ? 0x10 : 0x20) | (Op->OPRaw >= 0xBE ? 0x40 : 0) : 0;
+  const uint8_t Result = AluSource ? 0x80 : Extend ? (OpSizeFromDst(Op) == OpSize::i16Bit ? 0x10 : 0x20) | (Op->OPRaw >= 0xBE ? 0x40 : 0) : 0;
   Ref Linear = _FexcSegmentAddress(Offset, Prefix == X86Tables::DecodeFlags::FLAG_FS_PREFIX ? 4 : 5, IR::OpSizeToSize(Size), Write, Result);
   Address = {.Base = Linear, .AddrSize = OpSize::i64Bit, .NonTSO = Address.NonTSO};
 }
