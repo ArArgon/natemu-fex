@@ -68,7 +68,7 @@ void OpDispatchBuilder::MOVVectorNTOp(OpcodeArgs, bool IsAVX) {
 
   if (Op->Dest.IsGPR() && Size >= OpSize::i128Bit) {
     ///< MOVNTDQA load non-temporal comes from SSE4.1 and is extended by AVX/AVX2.
-    Ref SrcAddr = LoadSourceGPR(Op, Op->Src[0], Op->Flags, {.LoadData = false});
+    Ref SrcAddr = MakeSegmentAddress(Op, Op->Src[0], GetGPROpSize());   // natemu: with the FS/GS base (FEX took the bare effective address)
     auto Src = fexc_slice1 ? _LoadMemFPRAutoTSO(Size, SrcAddr) : _VLoadNonTemporal(Size, SrcAddr, 0);   // natemu: a site
 
     if (IsAVX) {
@@ -93,7 +93,7 @@ void OpDispatchBuilder::MOVVectorNTOp(OpcodeArgs, bool IsAVX) {
       // MMX 64-bit comes from MOVNTQ
       StoreResultFPR(Op, Src, OpSize::i8Bit, MemoryAccessType::STREAM);
     } else {
-      Ref Dest = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.LoadData = false});
+      Ref Dest = MakeSegmentAddress(Op, Op->Dest, GetGPROpSize());   // natemu: with the FS/GS base (FEX took the bare effective address)
 
       // Single store non-temporal for larger operations.
       if (fexc_slice1) _StoreMemFPRAutoTSO(Size, Dest, Src);   // natemu: a site (ordered as any store: allowed for MOVNT)
@@ -2911,7 +2911,7 @@ void OpDispatchBuilder::MOVBetweenGPR_FPR(OpcodeArgs, VectorOpType VectorType) {
       const auto DstSize = std::max(OpSize::i32Bit, OpSizeFromDst(Op));
 
       // Storing first element to memory.
-      Ref Dest = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.LoadData = false});
+      Ref Dest = MakeSegmentAddress(Op, Op->Dest, GetGPROpSize());   // natemu: with the FS/GS base (FEX took the bare effective address)
       _StoreMemFPR(DstSize, Dest, Src, OpSize::i8Bit);
     }
   }

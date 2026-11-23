@@ -4373,17 +4373,16 @@ Ref OpDispatchBuilder::GetSegment(uint32_t Flags, uint32_t DefaultPrefix, bool O
 // anything else fails the compile, so no unchecked base is ever added.
 Ref OpDispatchBuilder::FexcSegCheckedBase() {
   if (!FexcSegActive || FexcSegManual) return nullptr;
+  // (A hard stop, not a decode failure: the handler has emitted IR by now and would go on without a base.)
   if (!FexcSegBase || FexcSegBlock != GetCurrentBlock()) {
-    DecodeFailure = true;
-    return nullptr;
+    ERROR_AND_DIE_FMT("natemu: the base of a limited FS or GS is asked for without its operand check in this IR block");
   }
   return FexcSegBase;
 }
 
 Ref OpDispatchBuilder::FexcSegmentCheck(const X86Tables::DecodedOp& Op, Ref Offset) {
   if (FexcSegBase) {
-    DecodeFailure = true;   // one operand, one check
-    return FexcSegBase;
+    ERROR_AND_DIE_FMT("natemu: a second operand check of one instruction through a limited FS or GS");
   }
   const auto Prefix = Op->Flags & X86Tables::DecodeFlags::FLAG_SEGMENTS;
   FexcSegOffset = Offset;
@@ -4624,7 +4623,9 @@ AddressMode OpDispatchBuilder::DecodeAddress(const X86Tables::DecodedOp& Op, con
   // form is the resident's). Its offset is formed below without a base, once: a second decode of the operand (a
   // read-modify-write's store) reuses it, as x86 computes one effective address.
   const bool FexcMoffs = Op->FexcMap == FEXC_MAP_PRIMARY && Op->OPRaw >= 0xA0 && Op->OPRaw <= 0xA3;
-  const bool FexcChecked = FexcSegActive && !FexcSegManual && (Operand.IsLiteral() ? FexcMoffs : !Operand.IsGPR()) &&
+  const bool FexcMemory = Operand.IsGPRDirect() || Operand.IsGPRIndirect() || Operand.IsGPRIndirectRelocation() || Operand.IsRIPRelative() ||
+                          Operand.IsRIPRelativeRelocation() || Operand.IsSIB() || Operand.IsSIBRelocation();
+  const bool FexcChecked = FexcSegActive && !FexcSegManual && (FexcMemory || (FexcMoffs && (Operand.IsLiteral() || Operand.IsLiteralRelocation()))) &&
                            !(Op->Flags & X86Tables::DecodeFlags::FLAG_VSIB_BYTE);
   if (FexcChecked && FexcSegBase) {
     return {.Segment = FexcSegCheckedBase(), .Base = FexcSegOffset, .AddrSize = GPRSize,

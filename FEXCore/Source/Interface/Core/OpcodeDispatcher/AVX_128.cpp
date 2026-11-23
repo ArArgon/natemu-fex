@@ -393,7 +393,7 @@ void OpDispatchBuilder::AVX128_MOVVectorNT(OpcodeArgs) {
       AVX128_StoreResult_WithOpSize(Op, Op->Dest, Is128Bit ? RefPair {.Low = Src.Low} : Src);
       return;
     }
-    Ref Dest = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.LoadData = false});
+    Ref Dest = MakeSegmentAddress(Op, Op->Dest, GetGPROpSize());   // natemu: with the FS/GS base (FEX took the bare effective address)
 
     if (Is128Bit) {
       // Single store non-temporal for 128-bit operations.
@@ -766,7 +766,7 @@ void OpDispatchBuilder::AVX128_MOVBetweenGPR_FPR(OpcodeArgs) {
       StoreResultGPR(Op, Op->Dest, Src.Low);
     } else {
       // Storing first element to memory.
-      Ref Dest = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.LoadData = false});
+      Ref Dest = MakeSegmentAddress(Op, Op->Dest, GetGPROpSize());   // natemu: with the FS/GS base (FEX took the bare effective address)
       _StoreMemFPR(OpSizeFromDst(Op), Dest, Src.Low, OpSize::i8Bit);
     }
   }
