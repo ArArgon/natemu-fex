@@ -4746,8 +4746,13 @@ void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, 
   const bool CompareExchange = Write && Op->FexcMap == FEXC_MAP_TWO && (Raw & ~1U) == 0xB0 && (Op->Flags & X86Tables::DecodeFlags::FLAG_LOCK);
   const bool Exchange = Op->FexcMap == FEXC_MAP_PRIMARY && (Raw & ~1U) == 0x86;
   const bool ImmediateStore = StoreData && Op->FexcMap == FEXC_MAP_PRIMARY && (Op->OPRaw == 0xC6 || Op->OPRaw == 0xC7) && !(Op->ModRM & 0x38);
+  // Only the unaligned packed 128-bit MOV memory-source forms. The front end has
+  // already validated the VEX encoding and handled its FP control gates.
+  const bool QMove = !Write && Size == OpSize::i128Bit &&
+    (((Op->FexcMap == FEXC_MAP_TWO || Op->FexcMap == FEXC_MAP_TWO_66) && Raw == 0x10) ||
+     (Op->FexcMap == FEXC_MAP_VEX && (Op->FexcVex == 1 || Op->FexcVex == 5) && Op->FexcVexOp == 0x10));
   const bool Xlat = Op->FexcMap == FEXC_MAP_PRIMARY && Raw == 0xD7;
-  if (!fexc_slice1 || Is64BitMode || !(Move || Extend || Moffs || AluSource || RegSource || ImmediateStore || IntegerStore || Rmw || Xlat || Exchange || CompareExchange))
+  if (!fexc_slice1 || Is64BitMode || !(Move || Extend || Moffs || AluSource || RegSource || ImmediateStore || IntegerStore || Rmw || Xlat || Exchange || CompareExchange || QMove))
     return;
   const auto Prefix = Op->Flags & X86Tables::DecodeFlags::FLAG_SEGMENTS;
   if (Prefix != X86Tables::DecodeFlags::FLAG_FS_PREFIX && Prefix != X86Tables::DecodeFlags::FLAG_GS_PREFIX)
@@ -4772,7 +4777,7 @@ void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, 
     *StoreData = _FexcStoreImmediate(Value);
   }
   // Bits 5:4 describe an extending result (16/32 bits), bit 6 sign extension.
-  const uint8_t Result = CompareExchange ? 0x70 : Exchange ? 0x40 : Rmw ? 0x30 : AluSource || RegSource || Xlat ? 0x80 : Extend ? (OpSizeFromDst(Op) == OpSize::i16Bit ? 0x10 : 0x20) | (Op->OPRaw >= 0xBE ? 0x40 : 0) : 0;
+  const uint8_t Result = CompareExchange ? 0x70 : Exchange ? 0x40 : Rmw ? 0x30 : AluSource || RegSource || Xlat || QMove ? 0x80 : Extend ? (OpSizeFromDst(Op) == OpSize::i16Bit ? 0x10 : 0x20) | (Op->OPRaw >= 0xBE ? 0x40 : 0) : 0;
   // The runtime translates 32-bit compatibility code only at CPL3. The RO view belongs to that address space.
   const bool InlineDword = !fexc_cpl0 && Move && (Raw == 0x89 || Raw == 0x8B) && Size == OpSize::i32Bit;
   Ref Linear = _FexcSegmentAddress(Offset, Prefix == X86Tables::DecodeFlags::FLAG_FS_PREFIX ? 4 : 5, IR::OpSizeToSize(Size), Write, Result, InlineDword);

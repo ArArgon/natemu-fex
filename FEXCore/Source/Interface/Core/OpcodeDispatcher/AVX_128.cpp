@@ -40,10 +40,11 @@ OpDispatchBuilder::RefPair OpDispatchBuilder::AVX128_LoadSource_WithOpSize(
       LOGMAN_THROW_A_FMT(!IsVSIB, "VSIB uses LoadVSIB instead");
     }
 
-    const AddressMode A = DecodeAddress(Op, Operand, AccessType, true /* IsLoad */);
+    AddressMode A = DecodeAddress(Op, Operand, AccessType, true /* IsLoad */);
     if (NeedsHigh) {
       return _LoadMemPairFPRAutoTSO(OpSize::i128Bit, A, OpSize::i8Bit);
     } else {
+      FexcCheckSegmentAddress(Op, A, OpSize::i128Bit, false);
       return {.Low = _LoadMemFPRAutoTSO(OpSize::i128Bit, A, OpSize::i8Bit)};
     }
   }
