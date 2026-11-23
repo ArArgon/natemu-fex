@@ -4683,6 +4683,19 @@ AddressMode OpDispatchBuilder::DecodeAddress(const X86Tables::DecodedOp& Op, con
 }
 
 
+// The scalar MOV slice: the operand's architectural width equals its one memory transfer.
+void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, AddressMode& Address, IR::OpSize Size, bool Write) {
+  if (!fexc_slice1 || Is64BitMode || Op->FexcMap != FEXC_MAP_PRIMARY || Op->OPRaw < 0x88 || Op->OPRaw > 0x8B)
+    return;
+  const auto Prefix = Op->Flags & X86Tables::DecodeFlags::FLAG_SEGMENTS;
+  if (Prefix != X86Tables::DecodeFlags::FLAG_FS_PREFIX && Prefix != X86Tables::DecodeFlags::FLAG_GS_PREFIX)
+    return;
+  Address.Segment = nullptr;
+  Ref Offset = LoadEffectiveAddress(this, Address, OpSize::i32Bit, true);
+  Ref Linear = _FexcSegmentAddress(Offset, Prefix == X86Tables::DecodeFlags::FLAG_FS_PREFIX ? 4 : 5, IR::OpSizeToSize(Size), Write);
+  Address = {.Base = Linear, .AddrSize = OpSize::i64Bit, .NonTSO = Address.NonTSO};
+}
+
 Ref OpDispatchBuilder::LoadSource_WithOpSize(RegClass Class, const X86Tables::DecodedOp& Op, const X86Tables::DecodedOperand& Operand,
                                              IR::OpSize OpSize, uint32_t Flags, const LoadSourceOptions& Options) {
   auto [Align, LoadData, ForceLoad, AccessType, AllowUpperGarbage] = Options;
@@ -4720,6 +4733,7 @@ Ref OpDispatchBuilder::LoadSource_WithOpSize(RegClass Class, const X86Tables::De
 
   const bool ShouldLoad = (IsOperandMem(Operand, true) && LoadData) || ForceLoad;
   if (ShouldLoad) {
+    FexcCheckSegmentAddress(Op, A, OpSize, false);
     if (OpSize == OpSize::f80Bit) {
       Ref MemSrc = LoadEffectiveAddress(this, A, GetGPROpSize(), true);
       if (CTX->HostFeatures.SupportsSVE()) {
@@ -4858,6 +4872,7 @@ void OpDispatchBuilder::StoreResult_WithOpSize(RegClass Class, FEXCore::X86Table
   }
 
   AddressMode A = DecodeAddress(Op, Operand, AccessType, false /* IsLoad */);
+  FexcCheckSegmentAddress(Op, A, OpSize, true);
 
   if (OpSize == OpSize::f80Bit) {
     Ref MemStoreDst = LoadEffectiveAddress(this, A, GetGPROpSize(), true);

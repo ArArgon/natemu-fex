@@ -2989,6 +2989,11 @@
                 ],
         "HasSideEffects": true
       },
+      "GPR = FexcSegmentAddress GPR:$Offset, u8:$Segment, u8:$Bytes, u8:$Write": {
+        "Desc": ["Check a compatibility-mode FS/GS offset against the resident's descriptor and return its linear address."],
+        "DestSize": "OpSize::i32Bit",
+        "HasSideEffects": true
+      },
       "FexcFldcw GPR:$FCW": {
         "Desc": ["natemu slice1 (M2 task 4): FLDCW in translated code. When $FCW keeps the exception masks of the control word in the",
                  "guest state (bits 5:0) it is stored there (the rounding and precision controls only: an x87 run reads the rounding",

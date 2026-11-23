@@ -1608,6 +1608,7 @@ private:
     return LoadSource(RegClass::FPR, Op, Operand, Flags, Options);
   }
 
+  void FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, AddressMode& Address, IR::OpSize Size, bool Write);
   Ref LoadSource_WithOpSize(RegClass Class, const X86Tables::DecodedOp& Op, const X86Tables::DecodedOperand& Operand, IR::OpSize OpSize,
                             uint32_t Flags, const LoadSourceOptions& Options = {});
   Ref LoadSourceGPR_WithOpSize(const X86Tables::DecodedOp& Op, const X86Tables::DecodedOperand& Operand, IR::OpSize OpSize, uint32_t Flags,
