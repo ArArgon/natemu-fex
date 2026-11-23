@@ -4683,8 +4683,8 @@ AddressMode OpDispatchBuilder::DecodeAddress(const X86Tables::DecodedOp& Op, con
 }
 
 
-// Scalar moves and read-only integer ALU operands with one architectural transfer.
-void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, AddressMode& Address, IR::OpSize Size, bool Write, Ref* StoreData) {
+// Scalar moves, single-read integer operands and memory-destination ADD.
+void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, AddressMode& Address, IR::OpSize Size, bool Write, Ref* StoreData, bool RmwAdd) {
   const bool Move = Op->FexcMap == FEXC_MAP_PRIMARY && Op->OPRaw >= 0x88 && Op->OPRaw <= 0x8B;
   const bool Extend = Op->FexcMap == FEXC_MAP_TWO && (Op->OPRaw == 0xB6 || Op->OPRaw == 0xB7 || Op->OPRaw == 0xBE || Op->OPRaw == 0xBF);
   const bool Moffs = Op->FexcMap == FEXC_MAP_PRIMARY && Op->OPRaw >= 0xA0 && Op->OPRaw <= 0xA3;
@@ -4703,7 +4703,7 @@ void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, 
     (Op->FexcMap == FEXC_MAP_TWO_F3 && (Raw == 0xB8 || Raw == 0xBC || Raw == 0xBD)) ||
     (Op->FexcMap == FEXC_MAP_0F38 && ((Op->OP & ~0x100U) == 0xF0 || (Op->OP & ~0x101U) == 0x2F0));
   const bool ImmediateStore = StoreData && Op->FexcMap == FEXC_MAP_PRIMARY && (Op->OPRaw == 0xC6 || Op->OPRaw == 0xC7) && !(Op->ModRM & 0x38);
-  if (!fexc_slice1 || Is64BitMode || !(Move || Extend || Moffs || AluSource || RegSource || ImmediateStore))
+  if (!fexc_slice1 || Is64BitMode || !(Move || Extend || Moffs || AluSource || RegSource || ImmediateStore || RmwAdd))
     return;
   const auto Prefix = Op->Flags & X86Tables::DecodeFlags::FLAG_SEGMENTS;
   if (Prefix != X86Tables::DecodeFlags::FLAG_FS_PREFIX && Prefix != X86Tables::DecodeFlags::FLAG_GS_PREFIX)
@@ -4728,7 +4728,7 @@ void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, 
     *StoreData = _FexcStoreImmediate(Value);
   }
   // Bits 5:4 describe an extending result (16/32 bits), bit 6 sign extension.
-  const uint8_t Result = AluSource || RegSource ? 0x80 : Extend ? (OpSizeFromDst(Op) == OpSize::i16Bit ? 0x10 : 0x20) | (Op->OPRaw >= 0xBE ? 0x40 : 0) : 0;
+  const uint8_t Result = RmwAdd ? 0x30 : AluSource || RegSource ? 0x80 : Extend ? (OpSizeFromDst(Op) == OpSize::i16Bit ? 0x10 : 0x20) | (Op->OPRaw >= 0xBE ? 0x40 : 0) : 0;
   Ref Linear = _FexcSegmentAddress(Offset, Prefix == X86Tables::DecodeFlags::FLAG_FS_PREFIX ? 4 : 5, IR::OpSizeToSize(Size), Write, Result);
   Address = {.Base = Linear, .AddrSize = OpSize::i64Bit, .NonTSO = Address.NonTSO};
 }
@@ -5047,12 +5047,22 @@ void OpDispatchBuilder::ALUOp(OpcodeArgs, FEXCore::IR::IROps ALUIROp, FEXCore::I
 
   Ref Result {};
   Ref Dest {};
+  // Use a single checked address for both effects of a non-LOCK ADD r/m,r in compatibility code.
+  const auto Segment = Op->Flags & X86Tables::DecodeFlags::FLAG_SEGMENTS;
+  const bool CheckedAdd = fexc_slice1 && !Is64BitMode && Op->FexcMap == FEXC_MAP_PRIMARY && Op->OPRaw <= 1 &&
+                          IsOperandMem(Op->Dest, true) && !DestIsLockedMem(Op) &&
+                          (Segment == X86Tables::DecodeFlags::FLAG_FS_PREFIX || Segment == X86Tables::DecodeFlags::FLAG_GS_PREFIX);
+  AddressMode RmwAddress {};
 
   if (DestIsLockedMem(Op)) {
     HandledLock = true;
     Ref DestMem = MakeSegmentAddress(Op, Op->Dest);
     DeriveOp(FetchOp, AtomicFetchOp, _AtomicFetchAdd(Size, Src, DestMem));
     Dest = FetchOp;
+  } else if (CheckedAdd) {
+    RmwAddress = DecodeAddress(Op, Op->Dest, MemoryAccessType::DEFAULT, true);
+    FexcCheckSegmentAddress(Op, RmwAddress, Size, true, nullptr, true);
+    Dest = _LoadMemAutoTSO(RegClass::GPR, Size, RmwAddress, Size);
   } else if (DestRAX) {
     Dest = LoadGPRRegister(X86State::REG_RAX, OpSizeFromSrc(Op), 0, true);
   } else {
@@ -5091,6 +5101,8 @@ void OpDispatchBuilder::ALUOp(OpcodeArgs, FEXCore::IR::IROps ALUIROp, FEXCore::I
 
   if (DestRAX) {
     StoreGPRResultWithZExtSemantics(X86State::REG_RAX, Result, ResultSize);
+  } else if (CheckedAdd) {
+    _StoreMemAutoTSO(RegClass::GPR, Size, RmwAddress, Result, Size);
   } else if (!DestIsLockedMem(Op)) {
     StoreResultGPR_WithOpSize(Op, Op->Dest, Result, ResultSize, OpSize::iInvalid, MemoryAccessType::DEFAULT);
   }
