@@ -4695,7 +4695,14 @@ void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, 
   const bool AluSource = Op->FexcMap == FEXC_MAP_PRIMARY &&
     ((Raw <= 0x3B && (Raw & 6) == 2) || Raw == 0x38 || Raw == 0x39 || Raw == 0x84 || Raw == 0x85 ||
      ((Raw == 0x80 || Raw == 0x81 || Raw == 0x83) && Group == 7) || ((Raw == 0xF6 || Raw == 0xF7) && Group == 0));
-  if (!fexc_slice1 || Is64BitMode || !(Move || Extend || Moffs || AluSource))
+  // All of these read the ModRM operand before selecting, counting or transforming its value.
+  // The 0F38 decoder retains the 66/F2 prefix bits in bits 8/9 of its 16-bit table index OP.
+  const bool RegSource =
+    (Op->FexcMap == FEXC_MAP_PRIMARY && (Raw == 0x69 || Raw == 0x6B)) ||
+    (Op->FexcMap == FEXC_MAP_TWO && ((Raw >= 0x40 && Raw <= 0x4F) || Raw == 0xAF || Raw == 0xBC || Raw == 0xBD)) ||
+    (Op->FexcMap == FEXC_MAP_TWO_F3 && (Raw == 0xB8 || Raw == 0xBC || Raw == 0xBD)) ||
+    (Op->FexcMap == FEXC_MAP_0F38 && ((Op->OP & ~0x100U) == 0xF0 || (Op->OP & ~0x101U) == 0x2F0));
+  if (!fexc_slice1 || Is64BitMode || !(Move || Extend || Moffs || AluSource || RegSource))
     return;
   const auto Prefix = Op->Flags & X86Tables::DecodeFlags::FLAG_SEGMENTS;
   if (Prefix != X86Tables::DecodeFlags::FLAG_FS_PREFIX && Prefix != X86Tables::DecodeFlags::FLAG_GS_PREFIX)
@@ -4712,7 +4719,7 @@ void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, 
     Offset = LoadEffectiveAddress(this, Address, OpSize::i32Bit, true);
   }
   // Bits 5:4 describe an extending result (16/32 bits), bit 6 sign extension.
-  const uint8_t Result = AluSource ? 0x80 : Extend ? (OpSizeFromDst(Op) == OpSize::i16Bit ? 0x10 : 0x20) | (Op->OPRaw >= 0xBE ? 0x40 : 0) : 0;
+  const uint8_t Result = AluSource || RegSource ? 0x80 : Extend ? (OpSizeFromDst(Op) == OpSize::i16Bit ? 0x10 : 0x20) | (Op->OPRaw >= 0xBE ? 0x40 : 0) : 0;
   Ref Linear = _FexcSegmentAddress(Offset, Prefix == X86Tables::DecodeFlags::FLAG_FS_PREFIX ? 4 : 5, IR::OpSizeToSize(Size), Write, Result);
   Address = {.Base = Linear, .AddrSize = OpSize::i64Bit, .NonTSO = Address.NonTSO};
 }
