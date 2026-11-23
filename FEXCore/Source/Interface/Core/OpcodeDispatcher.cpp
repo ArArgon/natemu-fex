@@ -4684,7 +4684,7 @@ AddressMode OpDispatchBuilder::DecodeAddress(const X86Tables::DecodedOp& Op, con
 
 
 // Scalar moves and read-only integer ALU operands with one architectural transfer.
-void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, AddressMode& Address, IR::OpSize Size, bool Write) {
+void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, AddressMode& Address, IR::OpSize Size, bool Write, Ref* StoreData) {
   const bool Move = Op->FexcMap == FEXC_MAP_PRIMARY && Op->OPRaw >= 0x88 && Op->OPRaw <= 0x8B;
   const bool Extend = Op->FexcMap == FEXC_MAP_TWO && (Op->OPRaw == 0xB6 || Op->OPRaw == 0xB7 || Op->OPRaw == 0xBE || Op->OPRaw == 0xBF);
   const bool Moffs = Op->FexcMap == FEXC_MAP_PRIMARY && Op->OPRaw >= 0xA0 && Op->OPRaw <= 0xA3;
@@ -4702,7 +4702,8 @@ void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, 
     (Op->FexcMap == FEXC_MAP_TWO && ((Raw >= 0x40 && Raw <= 0x4F) || Raw == 0xAF || Raw == 0xBC || Raw == 0xBD)) ||
     (Op->FexcMap == FEXC_MAP_TWO_F3 && (Raw == 0xB8 || Raw == 0xBC || Raw == 0xBD)) ||
     (Op->FexcMap == FEXC_MAP_0F38 && ((Op->OP & ~0x100U) == 0xF0 || (Op->OP & ~0x101U) == 0x2F0));
-  if (!fexc_slice1 || Is64BitMode || !(Move || Extend || Moffs || AluSource || RegSource))
+  const bool ImmediateStore = StoreData && Op->FexcMap == FEXC_MAP_PRIMARY && (Op->OPRaw == 0xC6 || Op->OPRaw == 0xC7) && !(Op->ModRM & 0x38);
+  if (!fexc_slice1 || Is64BitMode || !(Move || Extend || Moffs || AluSource || RegSource || ImmediateStore))
     return;
   const auto Prefix = Op->Flags & X86Tables::DecodeFlags::FLAG_SEGMENTS;
   if (Prefix != X86Tables::DecodeFlags::FLAG_FS_PREFIX && Prefix != X86Tables::DecodeFlags::FLAG_GS_PREFIX)
@@ -4717,6 +4718,14 @@ void OpDispatchBuilder::FexcCheckSegmentAddress(const X86Tables::DecodedOp& Op, 
     Offset = _InlineConstant(Value);
   } else {
     Offset = LoadEffectiveAddress(this, Address, OpSize::i32Bit, true);
+  }
+  if (ImmediateStore) {
+    // The same register supplies the native store and a wrapped store at the preceding descriptor check.
+    const unsigned Bytes = IR::OpSizeToSize(Size);
+    const uint8_t* Field = fexc_guest_bytes(Op->PC + Op->InstSize - Bytes, Bytes);
+    uint32_t Value = 0;
+    memcpy(&Value, Field, Bytes);
+    *StoreData = _FexcStoreImmediate(Value);
   }
   // Bits 5:4 describe an extending result (16/32 bits), bit 6 sign extension.
   const uint8_t Result = AluSource || RegSource ? 0x80 : Extend ? (OpSizeFromDst(Op) == OpSize::i16Bit ? 0x10 : 0x20) | (Op->OPRaw >= 0xBE ? 0x40 : 0) : 0;
@@ -4900,7 +4909,7 @@ void OpDispatchBuilder::StoreResult_WithOpSize(RegClass Class, FEXCore::X86Table
   }
 
   AddressMode A = DecodeAddress(Op, Operand, AccessType, false /* IsLoad */);
-  FexcCheckSegmentAddress(Op, A, OpSize, true);
+  FexcCheckSegmentAddress(Op, A, OpSize, true, &Src);
 
   if (OpSize == OpSize::f80Bit) {
     Ref MemStoreDst = LoadEffectiveAddress(this, A, GetGPROpSize(), true);
