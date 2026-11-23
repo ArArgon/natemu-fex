@@ -2989,7 +2989,7 @@
                 ],
         "HasSideEffects": true
       },
-      "GPR = FexcSegmentAddress GPR:$Offset, u8:$Segment, u8:$Bytes, u8:$Write": {
+      "GPR = FexcSegmentAddress GPR:$Offset, u8:$Segment, u8:$Bytes, u8:$Write, u8:$Result": {
         "Desc": ["Check a compatibility-mode FS/GS offset against the resident's descriptor and return its linear address."],
         "DestSize": "OpSize::i32Bit",
         "HasSideEffects": true
