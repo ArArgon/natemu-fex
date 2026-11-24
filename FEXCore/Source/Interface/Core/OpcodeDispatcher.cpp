@@ -3332,9 +3332,10 @@ void OpDispatchBuilder::FexcStringOp(OpcodeArgs, FexcString Kind) {
   // pass below then goes on from there: RCX = 0 ends the instruction, else one element and, if RCX is then 0, the
   // instruction's end (a forward branch: the bulk part usually leaves at most that element, and an exit to its own RIP
   // with RCX = 0 is a boundary past the instruction, which the resident never links), else the exit to its own RIP.
-  // natemu (bulk REP plan, first cut): REP MOVSB and MOVSQ the same way (`FexcRepMovs`: 16-byte rounds inside both RSI's
-  // and RDI's pages), with F3 alone (F2 is REP too, but not this cut) and no FS/GS (64-bit mode ignores the other segment
-  // prefixes, which the decoder does not record).
+  // natemu (bulk REP plan, section 14): REP MOVSB and MOVSQ first move what fits inside both RSI's and RDI's pages
+  // (`FexcRepMovs`: 16-byte rounds where they are exact, then one element at a time), with F3 alone (F2 is REP too, but not
+  // this cut) and no FS/GS (64-bit mode ignores the other segment prefixes, which the decoder does not record); the pass
+  // below then goes on as for REP STOS. Not under fexc_no_bulk_movs (tools/fexc/replay.py's bounded comparison).
   const bool BulkMovs = Repeat && Kind == FexcString::MOVS && Is64BitMode && !A32 && (Bytes == 1 || Bytes == 8) &&
                         (Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_REP_PREFIX) &&
                         !(Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_REPNE_PREFIX) &&
