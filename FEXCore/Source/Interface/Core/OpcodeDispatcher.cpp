@@ -3332,9 +3332,20 @@ void OpDispatchBuilder::FexcStringOp(OpcodeArgs, FexcString Kind) {
   // pass below then goes on from there: RCX = 0 ends the instruction, else one element and, if RCX is then 0, the
   // instruction's end (a forward branch: the bulk part usually leaves at most that element, and an exit to its own RIP
   // with RCX = 0 is a boundary past the instruction, which the resident never links), else the exit to its own RIP.
-  const bool Bulk = Repeat && Kind == FexcString::STOS && Is64BitMode && !A32 && fexc_bulk;
+  // natemu (bulk REP plan, first cut): REP MOVSB and MOVSQ the same way (`FexcRepMovs`: 16-byte rounds inside both RSI's
+  // and RDI's pages), with F3 alone (F2 is REP too, but not this cut) and no FS/GS (64-bit mode ignores the other segment
+  // prefixes, which the decoder does not record).
+  const bool BulkMovs = Repeat && Kind == FexcString::MOVS && Is64BitMode && !A32 && (Bytes == 1 || Bytes == 8) &&
+                        (Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_REP_PREFIX) &&
+                        !(Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_REPNE_PREFIX) &&
+                        !(Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_SEGMENTS) && fexc_bulk;
+  const bool Bulk = (Repeat && Kind == FexcString::STOS && Is64BitMode && !A32 && fexc_bulk) || BulkMovs;
   if (Bulk) {
-    _FexcRepStos(uint8_t(Bytes));
+    if (Kind == FexcString::MOVS) {
+      _FexcRepMovs(uint8_t(Bytes));
+    } else {
+      _FexcRepStos(uint8_t(Bytes));
+    }
   }
 
   IRPair<IROp_CondJump> Done;
