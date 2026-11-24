@@ -2990,13 +2990,14 @@
         "HasSideEffects": true
       },
       "FexcRepMovs u8:$Width": {
-        "Desc": ["natemu slice1 (bulk REP plan, first cut): the part of a REP MOVS of $Width-byte elements ($Width 1 or 8; F3,",
-                 "64-bit addressing, no FS/GS, DF = 0) that fits in both RSI's and RDI's pages, in 16-byte rounds (a load pair from",
-                 "RSI, then a store pair to RDI), RCX, RSI and RDI updated after each store, so a fault or a watchpoint at either",
-                 "access finds the registers of an iteration boundary; nothing when RCX holds under one round, $Width = 8 and RSI or",
-                 "RDI is not 8-aligned, RDI - RSI is in [1, 15] modulo 4096 (a round would read a byte an earlier element of it",
-                 "writes), the fast-string bit is clear or DF = 1. Writes RCX's, RSI's and RDI's static registers (no IR value: the",
-                 "dispatcher reads them after it). Its JIT form is natemu's (fexc_sites.inc)"
+        "Desc": ["natemu slice1 (bulk REP plan, section 14): of a REP MOVS of $Width-byte elements ($Width 1 or 8; F3, 64-bit",
+                 "addressing, no FS/GS), with RCX >= 2, the fast-string bit set and DF = 0, the elements wholly inside both RSI's",
+                 "and RDI's pages: in 16-byte rounds (a load pair from RSI, then a store pair to RDI) when there is one, $Width = 8",
+                 "has both pointers 8-aligned and RDI - RSI is outside [1, 15] modulo 4096; the rest one element at a time (a load",
+                 "from RSI, then a store to RDI). RCX, RSI and RDI are updated after each store, so a fault or a watchpoint at any",
+                 "access finds the registers of an iteration boundary. An element crossing a page is left to the pass after it.",
+                 "Writes RCX's, RSI's and RDI's static registers (no IR value: the dispatcher reads them after it). Its JIT form",
+                 "is natemu's (fexc_sites.inc)"
                 ],
         "HasSideEffects": true
       },

@@ -3338,7 +3338,7 @@ void OpDispatchBuilder::FexcStringOp(OpcodeArgs, FexcString Kind) {
   const bool BulkMovs = Repeat && Kind == FexcString::MOVS && Is64BitMode && !A32 && (Bytes == 1 || Bytes == 8) &&
                         (Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_REP_PREFIX) &&
                         !(Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_REPNE_PREFIX) &&
-                        !(Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_SEGMENTS) && fexc_bulk;
+                        !(Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_SEGMENTS) && !fexc_no_bulk_movs && fexc_bulk;
   const bool Bulk = (Repeat && Kind == FexcString::STOS && Is64BitMode && !A32 && fexc_bulk) || BulkMovs;
   if (Bulk) {
     if (Kind == FexcString::MOVS) {
