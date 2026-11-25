@@ -2287,6 +2287,55 @@ void OpDispatchBuilder::AVX128_VPGATHER(OpcodeArgs, OpSize AddrElementSize) {
   auto VSIB = AVX128_LoadVSIB(Op, Op->Src[0], Op->Flags, NeedsHighAddrBytes);
   auto Mask = AVX128_LoadSource_WithOpSize(Op, Op->Src[1], Op->Flags, !Is128Bit);
 
+  // natemu slice1 (gather plan, natemu docs/restructure/gather-fast-path-plan.md 2.1): only with `--bulk` (never a step), in
+  // 64-bit code, without 0x67, FS or GS and without --no-inline-gather does a gather reach here (the allowlist cuts every
+  // other one, fexc_slice1.inc): each element of the form, lowest first, is its index sign-extended (32-bit indices), scaled
+  // and added to base + displacement, then `FexcGatherLoad` (no access when its mask element's sign bit is clear) into a
+  // zero vector; the loaded elements are blended into the old destination by the mask's sign bits, so a masked-off element
+  // keeps it. The destination, the zeroed mask and the upper halves are written only after the last element's load: at every
+  // element's site the guest state is the state before the gather (a fault there runs the gather alone, through the
+  // resident's transaction, which gives the SDM's partial progress).
+  if (fexc_slice1) {
+    const bool Inline = Is64BitMode && !(Op->Flags & X86Tables::DecodeFlags::FLAG_ADDRESS_SIZE) &&
+                        !(Op->Flags & X86Tables::DecodeFlags::FLAG_SEGMENTS) && !fexc_no_inline_gather && fexc_bulk;
+    LOGMAN_THROW_A_FMT(Inline, "natemu: a gather outside the inline conditions reached the dispatcher (the allowlist cuts it)");
+    Ref Base = VSIB.BaseAddr;
+    if (VSIB.Displacement) {
+      Base = Base ? Add(OpSize::i64Bit, Base, VSIB.Displacement) : Constant(VSIB.Displacement);
+    }
+    const size_t Ew = IR::OpSizeToSize(ElementLoadSize), Iw = IR::OpSizeToSize(AddrElementSize);
+    const size_t N = IR::OpSizeToSize(Size) / std::max(Ew, Iw), PerData = 16 / Ew, PerIndex = 16 / Iw;
+    const uint8_t Shift = FEXCore::ilog2(VSIB.Scale);
+    Ref Zero = LoadZeroVector(OpSize::i128Bit);
+    Ref Loaded[2] = {Zero, Zero};
+    for (size_t i = 0; i < N; ++i) {
+      Ref Index = _VExtractToGPR(OpSize::i128Bit, AddrElementSize, i < PerIndex ? VSIB.Low : VSIB.High, uint8_t(i % PerIndex));
+      if (Iw == 4) {
+        Index = _Sbfe(OpSize::i64Bit, 32, 0, Index);
+      }
+      Ref Addr = Base ? _AddShift(OpSize::i64Bit, Base, Index, ShiftType::LSL, Shift) :
+                 Shift ? _Lshl(OpSize::i64Bit, Index, Constant(Shift)) : Index;
+      const size_t H = i / PerData;
+      const uint8_t Lane = uint8_t(i % PerData);
+      Ref Element = _FexcGatherLoad(ElementLoadSize, H ? Mask.High : Mask.Low, Addr, Lane);
+      Loaded[H] = _VInsElement(OpSize::i128Bit, ElementLoadSize, Lane, 0, Loaded[H], Element);
+    }
+    auto Blend = [&](Ref Got, Ref MaskHalf, Ref Old) {
+      return _VBSL(OpSize::i128Bit, _VSShrI(OpSize::i128Bit, ElementLoadSize, MaskHalf, uint8_t(Ew * 8 - 1)), Got, Old);
+    };
+    RefPair Result {};
+    Result.Low = Blend(Loaded[0], Mask.Low, Dest.Low);
+    // The SDM zeroes the destination past the gathered elements: the upper 128 bits of a 16-byte result (a VEX.128 form or a
+    // VPGATHERQD/VGATHERQPS ymm form), and bits 127:64 of the 8-byte one (VPGATHERQD/VGATHERQPS xmm).
+    Result.High = N * Ew > 16 ? Blend(Loaded[1], Mask.High, Dest.High) : Zero;
+    if (N * Ew == 8) {
+      Result.Low = _VZip(OpSize::i128Bit, OpSize::i64Bit, Result.Low, Zero);
+    }
+    AVX128_StoreResult_WithOpSize(Op, Op->Dest, Result);
+    AVX128_StoreResult_WithOpSize(Op, Op->Src[1], RefPair {.Low = Zero, .High = Zero});
+    return;
+  }
+
   bool NeedsSVEScale = (VSIB.Scale == 2 || VSIB.Scale == 8) || (VSIB.BaseAddr == Invalid() && VSIB.Scale != 1);
 
   const bool NeedsExplicitSVEPath =

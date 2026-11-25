@@ -3001,6 +3001,16 @@
                 ],
         "HasSideEffects": true
       },
+      "FPR = FexcGatherLoad OpSize:#Size, FPR:$Mask, GPR:$Addr, u8:$Lane": {
+        "Desc": ["natemu slice1 (gather plan, natemu docs/restructure/gather-fast-path-plan.md): one element of an AVX2 gather",
+                 "inside generated code: when the sign bit of element $Lane ($Size bytes, 4 or 8) of $Mask is set, the $Size bytes",
+                 "at $Addr, else nothing (no access; the result is then undefined and the dispatcher's blend keeps the",
+                 "destination's element). The load is the op's only access, a site; nothing of the gather is written before its",
+                 "last element's load. Its JIT form is natemu's (fexc_sites.inc)"
+                ],
+        "DestSize": "Size",
+        "HasSideEffects": true
+      },
       "GPR = FexcSegmentBase GPR:$Offset, u8:$Segment": {
         "Desc": ["natemu (M2 checkpoint C): the base of the limited FS (4) or GS (5) of 32-bit user code, after the check of the",
                  "instruction's whole operand at $Offset against the vCPU's read-only record; the resident's stub decides what the",
