@@ -418,6 +418,7 @@ Decoder::DecodedBlockStatus Decoder::NormalOp(const FEXCore::X86Tables::X86InstI
   // Intel SDM Vol.1 6.4.7: near CALL/JMP/RET are forced to 64 bits, including indirect targets and stack effects.
   // Keep address-size overrides: they still select a 32-bit memory-indirect effective address.
   const bool FexcNearControl = fexc_slice1 && BlockInfo.Is64BitMode && Info->Name &&
+                              (Info->Name[0] == 'C' || Info->Name[0] == 'J' || Info->Name[0] == 'R') &&   // (most names fail here: no compare)
                               (std::string_view(Info->Name) == "CALL" || std::string_view(Info->Name) == "JMP" ||
                                std::string_view(Info->Name) == "RET");
   const bool HasNarrowingDisplacement =

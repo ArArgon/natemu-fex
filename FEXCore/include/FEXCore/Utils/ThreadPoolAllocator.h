@@ -16,6 +16,11 @@
 #include <type_traits>
 
 namespace FEXCore::Utils {
+// natemu fexc: a compile server that keeps its buffers (true): DelayedDisownBuffer only disowns, without reading the clock to decide
+// whether to give the buffer back (one compile thread, compiling all the time; the clock read was 1.6% of a compile), and a
+// disown or reown stamps the buffer's LastUsed with the far future instead of the clock (the stamps were 1.4% of a compile, fexc
+// profile): the allocator then never takes a disowned buffer back nor frees an unclaimed one, as such a server wants.
+inline bool PoolBufferKeepClaimed = false;
 /**
  * @brief An intrusive thread pool allocator
  *
@@ -143,7 +148,7 @@ public:
   void DisownBuffer(ContainerType::iterator Buffer) {
     // Client still owns the buffer but isn't using it
     // Allows us to claim it back if necessary
-    (*Buffer)->LastUsed.store(ClockType::now(), std::memory_order_relaxed);
+    (*Buffer)->LastUsed.store(PoolBufferKeepClaimed ? ClockType::time_point::max() : ClockType::now(), std::memory_order_relaxed);
     (*Buffer)->CurrentClientOwnedFlag->store(ClientFlags::FLAG_DISOWNED);
   }
 
@@ -170,7 +175,7 @@ public:
 
     // If we managed to change the flag from DISOWNED to OWNED then we have successfully reclaimed
     // Finish setting up state
-    (*Buffer)->LastUsed.store(ClockType::now(), std::memory_order_relaxed);
+    (*Buffer)->LastUsed.store(PoolBufferKeepClaimed ? ClockType::time_point::max() : ClockType::now(), std::memory_order_relaxed);
     return Buffer;
   }
 
@@ -476,9 +481,6 @@ private:
  *    - Or allocates another buffer when that fails
  *    - Frees stale buffers opportunistically
  */
-// natemu fexc: a compile server that keeps its buffers (true): DelayedDisownBuffer only disowns, without reading the clock to decide
-// whether to give the buffer back (one compile thread, compiling all the time; the clock read was 1.6% of a compile).
-inline bool PoolBufferKeepClaimed = false;
 
 template<typename Type, size_t PeriodMS, size_t PeriodFrequency>
 class PoolBufferWithTimedRetirement final {
